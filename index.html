@@ -31,6 +31,88 @@ const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 const W = 900, H = 700;
 
+// ============== AUDIO ==============
+let audioCtx = null;
+function initAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+}
+function playSound(type) {
+  if (!audioCtx) return;
+  try {
+    const now = audioCtx.currentTime;
+    if (type === 'shoot') {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(800, now);
+      osc.frequency.exponentialRampToValueAtTime(200, now + 0.08);
+      gain.gain.setValueAtTime(0.06, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+      osc.connect(gain).connect(audioCtx.destination);
+      osc.start(now);
+      osc.stop(now + 0.08);
+    } else if (type === 'explosion') {
+      const bufSize = audioCtx.sampleRate * 0.2;
+      const buf = audioCtx.createBuffer(1, bufSize, audioCtx.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < bufSize; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / bufSize);
+      const src = audioCtx.createBufferSource();
+      const gain = audioCtx.createGain();
+      src.buffer = buf;
+      gain.gain.setValueAtTime(0.12, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+      src.connect(gain).connect(audioCtx.destination);
+      src.start(now);
+    } else if (type === 'intercept') {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(1200, now);
+      osc.frequency.exponentialRampToValueAtTime(400, now + 0.15);
+      gain.gain.setValueAtTime(0.08, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+      osc.connect(gain).connect(audioCtx.destination);
+      osc.start(now);
+      osc.stop(now + 0.15);
+    } else if (type === 'buy') {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(523, now);
+      osc.frequency.setValueAtTime(659, now + 0.08);
+      osc.frequency.setValueAtTime(784, now + 0.16);
+      gain.gain.setValueAtTime(0.08, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.24);
+      osc.connect(gain).connect(audioCtx.destination);
+      osc.start(now);
+      osc.stop(now + 0.24);
+    } else if (type === 'warning') {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(440, now);
+      osc.frequency.setValueAtTime(880, now + 0.1);
+      osc.frequency.setValueAtTime(440, now + 0.2);
+      gain.gain.setValueAtTime(0.05, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+      osc.connect(gain).connect(audioCtx.destination);
+      osc.start(now);
+      osc.stop(now + 0.3);
+    } else if (type === 'skill') {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(300, now);
+      osc.frequency.exponentialRampToValueAtTime(1200, now + 0.2);
+      gain.gain.setValueAtTime(0.1, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+      osc.connect(gain).connect(audioCtx.destination);
+      osc.start(now);
+      osc.stop(now + 0.3);
+    }
+  } catch(e) {}
+}
+
 // ============== UTILITY ==============
 function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
 function lerp(a, b, t) { return a + (b - a) * t; }
@@ -76,6 +158,54 @@ const UPGRADE_DEFS = {
   range: { name: 'Attack Range', desc: '+15% per level', baseCost: 100, maxLevel: 5 },
 };
 
+// ============== AMMO TYPES ==============
+const AMMO_TYPES = {
+  standard: { name: 'Standard', damageMulti: 1.0, speedMulti: 1.0, color: '#44ff66', cost: 0, desc: 'Balanced ammo' },
+  ap: { name: 'Armor-Piercing', damageMulti: 1.5, speedMulti: 0.85, color: '#88aaff', cost: 200, desc: '+50% dmg, -15% fire rate' },
+  explosive: { name: 'Explosive', damageMulti: 0.8, speedMulti: 1.0, color: '#ffaa44', cost: 250, desc: '-20% dmg, splash damage', splash: 60 },
+};
+
+// ============== WEATHER ==============
+const WEATHER_TYPES = {
+  clear: { name: 'Clear', rangeMulti: 1.0, speedMulti: 1.0, overlay: null },
+  fog: { name: 'Fog', rangeMulti: 0.6, speedMulti: 0.9, overlay: 'rgba(180,200,220,0.25)' },
+  storm: { name: 'Storm', rangeMulti: 0.8, speedMulti: 0.85, overlay: 'rgba(20,20,40,0.3)' },
+  night: { name: 'Night', rangeMulti: 0.7, speedMulti: 1.0, overlay: 'rgba(0,0,30,0.45)' },
+};
+
+function getRandomWeather() {
+  const types = Object.keys(WEATHER_TYPES);
+  const weights = [40, 25, 20, 15]; // clear more common
+  const total = weights.reduce((a, b) => a + b, 0);
+  let r = Math.random() * total;
+  for (let i = 0; i < types.length; i++) {
+    r -= weights[i];
+    if (r <= 0) return types[i];
+  }
+  return 'clear';
+}
+
+// ============== SKILLS ==============
+const SKILLS = {
+  airstrike: { name: 'Air Strike', key: '1', cooldown: 30, desc: 'Bomb all enemies for 80 damage', unlockWave: 3 },
+  repair: { name: 'Repair Drone', key: '2', cooldown: 25, desc: 'Heal all ships for 100 HP', unlockWave: 1 },
+  emp: { name: 'EMP Blast', key: '3', cooldown: 35, desc: 'Stun all enemies for 3s', unlockWave: 5 },
+};
+
+// ============== ACHIEVEMENTS ==============
+const ACHIEVEMENTS = [
+  { id: 'first_blood', name: 'First Blood', desc: 'Destroy first enemy', reward: 50, check: () => game.totalKills >= 1 },
+  { id: 'wave5', name: 'Survivor', desc: 'Reach wave 5', reward: 100, check: () => game.wave >= 5 },
+  { id: 'wave10', name: 'Veteran', desc: 'Reach wave 10', reward: 200, check: () => game.wave >= 10 },
+  { id: 'wave20', name: 'Admiral', desc: 'Reach wave 20', reward: 500, check: () => game.wave >= 20 },
+  { id: 'fleet5', name: 'Fleet Commander', desc: 'Own 5 ships at once', reward: 150, check: () => game.escortShips.length >= 5 },
+  { id: 'rich', name: 'War Profiteer', desc: 'Accumulate 5000 gold', reward: 200, check: () => game.gold >= 5000 },
+  { id: 'intercept5', name: 'Iron Dome', desc: 'Intercept 5 missiles total', reward: 100, check: () => game.totalIntercepts >= 5 },
+  { id: 'perfect', name: 'Perfect Escort', desc: 'Complete a wave with all convoy alive', reward: 150, check: () => game.hadPerfectWave },
+  { id: 'kills50', name: 'Destroyer', desc: 'Destroy 50 enemies total', reward: 200, check: () => game.totalKills >= 50 },
+  { id: 'boss_kill', name: 'Boss Slayer', desc: 'Destroy a boss ship', reward: 300, check: () => game.bossKills >= 1 },
+];
+
 // ============== GAME STATE ==============
 const game = {
   state: 'MENU',
@@ -119,6 +249,19 @@ const game = {
   shopSelectedShip: -1,
   retryAvailable: false,
   lastWaveConfig: null,
+  weather: 'clear',
+  raindrops: [],
+  lightning: 0,
+  skillCooldowns: { airstrike: 0, repair: 0, emp: 0 },
+  empActive: 0,
+  totalKills: 0,
+  totalIntercepts: 0,
+  hadPerfectWave: false,
+  bossKills: 0,
+  unlockedAchievements: new Set(),
+  achievementPopup: null,
+  achievementPopupTimer: 0,
+  blackMarketOffers: [],
 };
 
 // ============== CLASSES ==============
@@ -147,12 +290,14 @@ class EscortShip {
     this.targetX = this.x;
     this.targetY = this.y;
     this.id = Math.random().toString(36).substr(2, 9);
+    this.wake = [];
+    this.ammo = 'standard';
   }
   getMaxHp() { return this.baseHp + this.upgrades.hull * 50; }
-  getDamage() { return this.baseDamage * (1 + this.upgrades.damage * 0.25); }
-  getFireRate() { return this.baseFireRate / (1 + this.upgrades.fireRate * 0.20); }
-  getRange() { return this.baseRange * (1 + this.upgrades.range * 0.15); }
-  getSpeed() { return this.baseSpeed; }
+  getDamage() { return this.baseDamage * (1 + this.upgrades.damage * 0.25) * AMMO_TYPES[this.ammo].damageMulti; }
+  getFireRate() { return this.baseFireRate / (1 + this.upgrades.fireRate * 0.20) / AMMO_TYPES[this.ammo].speedMulti; }
+  getRange() { return this.baseRange * (1 + this.upgrades.range * 0.15) * WEATHER_TYPES[game.weather].rangeMulti; }
+  getSpeed() { return this.baseSpeed * WEATHER_TYPES[game.weather].speedMulti; }
   getUpgradeCost(upgradeType) {
     const def = UPGRADE_DEFS[upgradeType];
     return def.baseCost * Math.pow(2, this.upgrades[upgradeType]);
@@ -180,6 +325,10 @@ class EscortShip {
     this.x = clamp(this.x, this.size, W - this.size);
     this.y = clamp(this.y, this.size, H - this.size);
     if (this.fireCooldown > 0) this.fireCooldown -= dt;
+    // Wake trail
+    this.wake.push({ x: this.x, y: this.y, life: 1.0 });
+    if (this.wake.length > 12) this.wake.shift();
+    for (const w of this.wake) w.life -= dt * 1.2;
   }
   tryFire(enemies) {
     if (this.fireCooldown > 0) return;
@@ -196,10 +345,15 @@ class EscortShip {
     if (nearest) {
       this.fireCooldown = this.getFireRate();
       this.angle = angleTo(this, nearest);
-      game.projectiles.push(new Projectile(this.x, this.y, nearest, this.getDamage(), '#44ff66', true));
+      const ammoInfo = AMMO_TYPES[this.ammo];
+      const proj = new Projectile(this.x, this.y, nearest, this.getDamage(), ammoInfo.color, true);
+      proj.splash = ammoInfo.splash || 0;
+      game.projectiles.push(proj);
+      playSound('shoot');
     }
   }
   draw() {
+    drawWake(this.wake, this.size);
     ctx.save();
     ctx.translate(this.x, this.y);
     ctx.rotate(this.angle + Math.PI / 2);
@@ -246,11 +400,16 @@ class ConvoyShip {
     this.goldBonus = def.goldBonus;
     this.angle = -Math.PI / 2;
     this.alive = true;
+    this.wake = [];
   }
   update(dt) {
     this.y -= this.speed * 60 * dt;
+    this.wake.push({ x: this.x, y: this.y, life: 1.0 });
+    if (this.wake.length > 15) this.wake.shift();
+    for (const w of this.wake) w.life -= dt * 0.8;
   }
   draw() {
+    drawWake(this.wake, this.size);
     ctx.save();
     ctx.translate(this.x, this.y);
     ctx.rotate(this.angle + Math.PI / 2);
@@ -307,12 +466,14 @@ class Enemy {
     this.isBoss = type === 'boss';
     this.isDrone = type === 'drone';
     this.mineFlash = 0;
+    this.wake = [];
   }
   update(dt) {
     if (this.isMine) {
       this.mineFlash += dt * 3;
       return;
     }
+    if (game.empActive > 0) return; // stunned by EMP
     let target = null;
     let minD = Infinity;
     const targets = this.isDrone ? game.convoyShips : [...game.convoyShips, ...game.escortShips];
@@ -353,8 +514,14 @@ class Enemy {
     }
     this.x = clamp(this.x, -50, W + 50);
     this.y = clamp(this.y, -50, H + 50);
+    if (!this.isMine) {
+      this.wake.push({ x: this.x, y: this.y, life: 1.0 });
+      if (this.wake.length > 10) this.wake.shift();
+      for (const w of this.wake) w.life -= dt * 1.5;
+    }
   }
   draw() {
+    if (!this.isMine) drawWake(this.wake, this.size, true);
     ctx.save();
     ctx.translate(this.x, this.y);
     if (this.isMine) {
@@ -422,6 +589,7 @@ class Projectile {
     this.isPlayerSide = isPlayerSide;
     this.life = 3;
     this.size = 3;
+    this.splash = 0;
   }
   update(dt) {
     this.x += this.vx * 60 * dt;
@@ -603,8 +771,47 @@ class Explosion {
 }
 
 // ============== HELPERS ==============
+function drawWake(wake, shipSize, isEnemy) {
+  if (wake.length < 2) return;
+  for (let i = 1; i < wake.length; i++) {
+    const w = wake[i];
+    if (w.life <= 0) continue;
+    const prev = wake[i - 1];
+    const alpha = Math.max(0, w.life) * 0.25;
+    const spread = (1 - w.life) * shipSize * 0.8;
+    const angle = Math.atan2(w.y - prev.y, w.x - prev.x) + Math.PI / 2;
+    const lx = w.x + Math.cos(angle) * spread;
+    const ly = w.y + Math.sin(angle) * spread;
+    const rx = w.x - Math.cos(angle) * spread;
+    const ry = w.y - Math.sin(angle) * spread;
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = isEnemy ? 'rgba(255,150,150,0.5)' : 'rgba(150,200,255,0.5)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(lx, ly, 1 + spread * 0.3, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(rx, ry, 1 + spread * 0.3, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function checkAchievements() {
+  for (const a of ACHIEVEMENTS) {
+    if (!game.unlockedAchievements.has(a.id) && a.check()) {
+      game.unlockedAchievements.add(a.id);
+      game.gold += a.reward;
+      game.score += a.reward;
+      game.achievementPopup = a;
+      game.achievementPopupTimer = 3;
+    }
+  }
+}
+
 function spawnExplosion(x, y, size) {
   game.explosions.push(new Explosion(x, y, size || 15));
+  playSound('explosion');
 }
 
 function addFloatingText(x, y, text, color) {
@@ -673,6 +880,7 @@ function spawnMissile() {
   if (aliveConvoy.length === 0) return;
   const target = aliveConvoy[randInt(0, aliveConvoy.length - 1)];
   game.missiles.push(new Missile(target));
+  playSound('warning');
 }
 
 // ============== WAVE SETUP ==============
@@ -689,6 +897,8 @@ function setupWave(waveNum) {
   game.missiles = [];
   game.explosions = [];
   game.missileTimer = getMissileInterval();
+  game.weather = waveNum === 1 ? 'clear' : getRandomWeather();
+  game.raindrops = [];
 
   // Convoy setup
   game.convoyShips = [];
@@ -784,6 +994,110 @@ function drawOcean() {
     ctx.stroke();
   }
   ctx.globalAlpha = 1;
+
+  // Coastline/shore hints on sides
+  ctx.globalAlpha = 0.12;
+  ctx.fillStyle = '#3a2a1a';
+  // Left shore
+  ctx.beginPath();
+  for (let y = 0; y <= H; y += 20) {
+    const x = 10 + Math.sin((y + game.waterOffset * 0.3) * 0.015) * 15;
+    if (y === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.lineTo(0, H);
+  ctx.lineTo(0, 0);
+  ctx.fill();
+  // Right shore
+  ctx.beginPath();
+  for (let y = 0; y <= H; y += 20) {
+    const x = W - 10 - Math.sin((y + game.waterOffset * 0.3 + 100) * 0.015) * 15;
+    if (y === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.lineTo(W, H);
+  ctx.lineTo(W, 0);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+
+  // Small islands (static decorative elements)
+  if (game.state === 'PLAYING') {
+    const islandY1 = ((200 - game.waterOffset * 0.1) % (H + 200)) - 100;
+    const islandY2 = ((500 - game.waterOffset * 0.1) % (H + 200)) - 100;
+    drawIsland(70, islandY1, 18);
+    drawIsland(W - 60, islandY2, 14);
+  }
+}
+
+function drawIsland(x, y, r) {
+  ctx.globalAlpha = 0.3;
+  // Shallow water around island
+  ctx.fillStyle = '#1a4a5a';
+  ctx.beginPath();
+  ctx.ellipse(x, y, r * 2.5, r * 1.8, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Island
+  ctx.fillStyle = '#4a3a2a';
+  ctx.beginPath();
+  ctx.ellipse(x, y, r, r * 0.7, 0.2, 0, Math.PI * 2);
+  ctx.fill();
+  // Green top
+  ctx.fillStyle = '#2a5a2a';
+  ctx.beginPath();
+  ctx.ellipse(x - 2, y - 2, r * 0.7, r * 0.5, 0.1, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
+function drawWeather(dt) {
+  const w = WEATHER_TYPES[game.weather];
+  if (w.overlay) {
+    ctx.fillStyle = w.overlay;
+    ctx.fillRect(0, 0, W, H);
+  }
+  if (game.weather === 'storm') {
+    // Rain
+    if (game.raindrops.length < 80) {
+      game.raindrops.push({ x: rand(0, W), y: rand(-20, 0), speed: rand(8, 14) });
+    }
+    ctx.strokeStyle = 'rgba(150,180,220,0.4)';
+    ctx.lineWidth = 1;
+    for (let i = game.raindrops.length - 1; i >= 0; i--) {
+      const r = game.raindrops[i];
+      r.y += r.speed * 60 * dt;
+      r.x -= 2 * 60 * dt;
+      ctx.beginPath();
+      ctx.moveTo(r.x, r.y);
+      ctx.lineTo(r.x - 3, r.y + 12);
+      ctx.stroke();
+      if (r.y > H) {
+        r.y = rand(-20, 0);
+        r.x = rand(0, W + 50);
+      }
+    }
+    // Occasional lightning
+    game.lightning -= dt;
+    if (game.lightning <= 0 && Math.random() < 0.002) {
+      game.lightning = 0.08;
+    }
+    if (game.lightning > 0) {
+      ctx.fillStyle = 'rgba(200,210,255,0.15)';
+      ctx.fillRect(0, 0, W, H);
+    }
+  }
+  if (game.weather === 'fog') {
+    // Fog wisps
+    ctx.globalAlpha = 0.06;
+    for (let i = 0; i < 5; i++) {
+      const fy = (i * 150 + game.time * 10) % (H + 100) - 50;
+      const fx = Math.sin(game.time * 0.3 + i) * 100 + W / 2;
+      ctx.fillStyle = '#ccddee';
+      ctx.beginPath();
+      ctx.ellipse(fx, fy, 200, 30, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
 }
 
 function drawHUD() {
@@ -816,13 +1130,47 @@ function drawHUD() {
   ctx.fillText('Ships: ' + game.escortShips.length + '/' + game.maxSlots, 550, 24);
 
   ctx.fillStyle = '#ffaa44';
-  ctx.fillText('Interceptors: ' + game.interceptorMissiles, 700, 24);
+  ctx.fillText('Interceptors: ' + game.interceptorMissiles, 680, 24);
+
+  // Weather indicator
+  const wName = WEATHER_TYPES[game.weather].name;
+  const wColor = game.weather === 'clear' ? '#88ff88' : game.weather === 'fog' ? '#aabbcc' : game.weather === 'storm' ? '#8888ff' : '#6666aa';
+  ctx.fillStyle = wColor;
+  ctx.textAlign = 'center';
+  ctx.fillText(wName, W / 2 + 70, 24);
 
   // Convoy status
   const alive = game.convoyShips.filter(c => c.hp > 0).length;
   ctx.fillStyle = alive > 0 ? '#44ff88' : '#ff4444';
   ctx.textAlign = 'right';
   ctx.fillText('Convoy: ' + alive + '/' + game.totalConvoy, W - 10, 24);
+
+  // Skill bar at bottom
+  const skillKeys = Object.keys(SKILLS);
+  const skBarY = H - 40;
+  for (let i = 0; i < skillKeys.length; i++) {
+    const sk = SKILLS[skillKeys[i]];
+    const cd = game.skillCooldowns[skillKeys[i]];
+    const locked = game.wave < sk.unlockWave;
+    const bx = 10 + i * 130;
+    ctx.fillStyle = locked ? 'rgba(30,30,30,0.7)' : cd > 0 ? 'rgba(40,20,20,0.7)' : 'rgba(20,40,20,0.7)';
+    ctx.fillRect(bx, skBarY, 120, 30);
+    ctx.strokeStyle = locked ? '#333' : cd > 0 ? '#663333' : '#44aa66';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(bx, skBarY, 120, 30);
+    ctx.fillStyle = locked ? '#555' : cd > 0 ? '#aa6644' : '#ffffff';
+    ctx.font = 'bold 11px Segoe UI';
+    ctx.textAlign = 'left';
+    ctx.fillText('[' + sk.key + '] ' + sk.name, bx + 5, skBarY + 13);
+    ctx.font = '9px Segoe UI';
+    ctx.fillStyle = locked ? '#444' : cd > 0 ? '#ff8844' : '#88ff88';
+    ctx.fillText(locked ? 'Wave ' + sk.unlockWave : cd > 0 ? Math.ceil(cd) + 's' : 'Ready', bx + 5, skBarY + 25);
+    if (cd > 0 && !locked) {
+      const ratio = cd / sk.cooldown;
+      ctx.fillStyle = 'rgba(255,100,50,0.2)';
+      ctx.fillRect(bx, skBarY, 120 * ratio, 30);
+    }
+  }
 }
 
 function drawMinimap() {
@@ -866,6 +1214,12 @@ function drawMinimap() {
 function updateGame(dt) {
   game.time += dt;
   game.dt = dt;
+
+  // Skill cooldowns
+  for (const sk of Object.keys(game.skillCooldowns)) {
+    if (game.skillCooldowns[sk] > 0) game.skillCooldowns[sk] -= dt;
+  }
+  if (game.empActive > 0) game.empActive -= dt;
 
   // Convoy movement
   for (const c of game.convoyShips) {
@@ -922,11 +1276,30 @@ function updateGame(dt) {
         if (e.hp > 0 && dist(p, e) < e.size) {
           e.hp -= p.damage;
           p.life = 0;
+          // Splash damage
+          if (p.splash && p.splash > 0) {
+            for (const e2 of game.enemies) {
+              if (e2 !== e && e2.hp > 0 && dist(e, e2) < p.splash) {
+                e2.hp -= p.damage * 0.5;
+                if (e2.hp <= 0) {
+                  spawnExplosion(e2.x, e2.y, 12);
+                  game.gold += e2.gold;
+                  game.score += e2.gold;
+                  game.waveGoldEarned += e2.gold;
+                  game.totalKills++;
+                  if (e2.isBoss) game.bossKills++;
+                  addFloatingText(e2.x, e2.y - 15, '+' + e2.gold + 'g', '#ffd700');
+                }
+              }
+            }
+          }
           if (e.hp <= 0) {
             spawnExplosion(e.x, e.y, 15);
             game.gold += e.gold;
             game.score += e.gold;
             game.waveGoldEarned += e.gold;
+            game.totalKills++;
+            if (e.isBoss) game.bossKills++;
             addFloatingText(e.x, e.y - 15, '+' + e.gold + 'g', '#ffd700');
           }
           break;
@@ -991,6 +1364,10 @@ function updateGame(dt) {
     }
   }
 
+  // Achievement check
+  checkAchievements();
+  if (game.achievementPopupTimer > 0) game.achievementPopupTimer -= dt;
+
   // Wave completion check
   const allEnemiesDead = game.enemies.length === 0 && game.waveSpawnQueue.length === 0;
   const allConvoyDead = game.convoyShips.every(c => c.hp <= 0);
@@ -1034,6 +1411,7 @@ function completeWave() {
   game.waveComplete = true;
   game.waveCompleteTimer = 3;
   game.survivedConvoy = game.convoyShips.filter(c => c.hp > 0).length;
+  if (game.survivedConvoy === game.totalConvoy) game.hadPerfectWave = true;
 
   let bonus = 0;
   for (const c of game.convoyShips) {
@@ -1050,6 +1428,29 @@ function completeWave() {
 
   // Refill interceptors
   game.interceptorMissiles = Math.min(game.interceptorMissiles + 2, 10);
+
+  // Generate black market offers
+  generateBlackMarket();
+}
+
+function generateBlackMarket() {
+  game.blackMarketOffers = [];
+  const offers = [
+    { type: 'gold_boost', name: 'Gold Cache', desc: '+200 Gold', cost: 80, apply: () => { game.gold += 200; } },
+    { type: 'hull_repair', name: 'Emergency Repair Kit', desc: 'Full heal all ships', cost: 120, apply: () => { for (const s of game.escortShips) s.hp = s.maxHp; for (const c of game.convoyShips) if (c.hp > 0) c.hp = c.maxHp; } },
+    { type: 'interceptors', name: 'Missile Stockpile', desc: '+5 Interceptors', cost: 100, apply: () => { game.interceptorMissiles = Math.min(game.interceptorMissiles + 5, 10); } },
+    { type: 'random_upgrade', name: 'Mysterious Parts', desc: 'Random upgrade to random ship', cost: 150, apply: () => { if (game.escortShips.length > 0) { const s = game.escortShips[randInt(0, game.escortShips.length - 1)]; const uTypes = Object.keys(UPGRADE_DEFS); const ut = uTypes[randInt(0, uTypes.length - 1)]; if (s.upgrades[ut] < UPGRADE_DEFS[ut].maxLevel) { s.upgrades[ut]++; s.maxHp = s.getMaxHp(); } } } },
+    { type: 'discount_ship', name: 'Salvaged Frigate', desc: 'Get a Frigate at half price', cost: 250, apply: () => { if (game.escortShips.length < game.maxSlots) game.escortShips.push(new EscortShip('frigate')); } },
+  ];
+  // Pick 2-3 random offers
+  const shuffled = offers.sort(() => Math.random() - 0.5);
+  const count = Math.min(randInt(2, 3), shuffled.length);
+  for (let i = 0; i < count; i++) {
+    // Apply random price variance
+    const offer = { ...shuffled[i] };
+    offer.cost = Math.floor(offer.cost * rand(0.7, 1.3));
+    game.blackMarketOffers.push(offer);
+  }
 }
 
 // ============== SHOP ==============
@@ -1075,9 +1476,10 @@ function drawShop() {
     { id: 'slots', label: 'Buy Slots' },
     { id: 'sell', label: 'Sell Ships' },
     { id: 'missiles', label: 'Missile Defense' },
+    { id: 'market', label: 'Black Market' },
   ];
 
-  const tabW = 160;
+  const tabW = 140;
   const tabH = 32;
   const tabY = 85;
   const tabStartX = W / 2 - (tabs.length * tabW) / 2;
@@ -1108,6 +1510,8 @@ function drawShop() {
     drawShopSell(contentY);
   } else if (game.shopTab === 'missiles') {
     drawShopMissiles(contentY);
+  } else if (game.shopTab === 'market') {
+    drawShopMarket(contentY);
   }
 
   // Continue button
@@ -1348,6 +1752,52 @@ function drawShopUpgrade(startY) {
       ctx.fillText('MAXED', bx + bw / 2, by + 140);
     }
   }
+
+  // Ammo type selector
+  const ammoY = uy + 200;
+  ctx.fillStyle = '#cccccc';
+  ctx.font = 'bold 13px Segoe UI';
+  ctx.textAlign = 'center';
+  ctx.fillText('Ammo Type: ' + AMMO_TYPES[ship.ammo].name, W / 2, ammoY);
+  const ammoKeys = Object.keys(AMMO_TYPES);
+  for (let i = 0; i < ammoKeys.length; i++) {
+    const at = AMMO_TYPES[ammoKeys[i]];
+    const abx = 120 + i * 230;
+    const aby = ammoY + 10;
+    const active = ship.ammo === ammoKeys[i];
+    const owned = ammoKeys[i] === 'standard' || ship['has_' + ammoKeys[i]];
+    const canBuy = !owned && game.gold >= at.cost;
+
+    ctx.fillStyle = active ? '#0d3a2a' : '#1a1a2a';
+    ctx.fillRect(abx, aby, 210, 45);
+    ctx.strokeStyle = active ? '#44ff66' : '#333355';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(abx, aby, 210, 45);
+    ctx.fillStyle = at.color;
+    ctx.font = 'bold 12px Segoe UI';
+    ctx.textAlign = 'left';
+    ctx.fillText(at.name, abx + 10, aby + 18);
+    ctx.fillStyle = '#aaa';
+    ctx.font = '10px Segoe UI';
+    ctx.fillText(at.desc, abx + 10, aby + 34);
+
+    if (!owned && at.cost > 0) {
+      ctx.fillStyle = canBuy ? '#ffd700' : '#886600';
+      ctx.font = 'bold 11px Segoe UI';
+      ctx.textAlign = 'right';
+      ctx.fillText(at.cost + 'g', abx + 200, aby + 26);
+    } else if (owned && !active) {
+      ctx.fillStyle = '#44aa66';
+      ctx.font = '10px Segoe UI';
+      ctx.textAlign = 'right';
+      ctx.fillText('EQUIP', abx + 200, aby + 26);
+    } else if (active) {
+      ctx.fillStyle = '#44ff66';
+      ctx.font = '10px Segoe UI';
+      ctx.textAlign = 'right';
+      ctx.fillText('ACTIVE', abx + 200, aby + 26);
+    }
+  }
 }
 
 function drawShopSlots(startY) {
@@ -1531,11 +1981,68 @@ function drawShopMissiles(startY) {
   ctx.fillText('Click near a missile to intercept it (costs 1 interceptor)', W / 2, startY + 296);
 }
 
+function drawShopMarket(startY) {
+  ctx.fillStyle = '#cccccc';
+  ctx.font = 'bold 16px Segoe UI';
+  ctx.textAlign = 'center';
+  ctx.fillText('Black Market', W / 2, startY + 10);
+  ctx.fillStyle = '#888888';
+  ctx.font = '12px Segoe UI';
+  ctx.fillText('Shady deals - new offers each wave!', W / 2, startY + 30);
+
+  if (game.blackMarketOffers.length === 0) {
+    ctx.fillStyle = '#666';
+    ctx.font = '14px Segoe UI';
+    ctx.fillText('No offers available.', W / 2, startY + 100);
+    return;
+  }
+
+  for (let i = 0; i < game.blackMarketOffers.length; i++) {
+    const o = game.blackMarketOffers[i];
+    const bx = W / 2 - 200;
+    const by = startY + 50 + i * 65;
+    const bw = 400;
+    const bh = 55;
+    const canBuy = game.gold >= o.cost;
+
+    ctx.fillStyle = canBuy ? '#1a1a0d' : '#1a1a2a';
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.strokeStyle = canBuy ? '#aa8844' : '#333355';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(bx, by, bw, bh);
+
+    ctx.fillStyle = '#ffd700';
+    ctx.font = 'bold 13px Segoe UI';
+    ctx.textAlign = 'left';
+    ctx.fillText(o.name, bx + 15, by + 22);
+    ctx.fillStyle = '#aaaaaa';
+    ctx.font = '11px Segoe UI';
+    ctx.fillText(o.desc, bx + 15, by + 40);
+
+    ctx.fillStyle = canBuy ? '#ffd700' : '#886600';
+    ctx.font = 'bold 13px Segoe UI';
+    ctx.textAlign = 'right';
+    ctx.fillText(o.cost + 'g', bx + bw - 90, by + 32);
+
+    if (canBuy) {
+      ctx.fillStyle = '#3a2a0a';
+      ctx.fillRect(bx + bw - 80, by + 12, 70, 28);
+      ctx.strokeStyle = '#ffd700';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(bx + bw - 80, by + 12, 70, 28);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '11px Segoe UI';
+      ctx.textAlign = 'center';
+      ctx.fillText('BUY', bx + bw - 45, by + 31);
+    }
+  }
+}
+
 // ============== SHOP CLICK ==============
 function handleShopClick(mx, my) {
   // Tab clicks
-  const tabs = ['buy', 'upgrade', 'slots', 'sell', 'missiles'];
-  const tabW = 160;
+  const tabs = ['buy', 'upgrade', 'slots', 'sell', 'missiles', 'market'];
+  const tabW = 140;
   const tabH = 32;
   const tabY = 85;
   const tabStartX = W / 2 - (tabs.length * tabW) / 2;
@@ -1618,6 +2125,27 @@ function handleShopClick(mx, my) {
         const by = uy;
         if (mx >= bx + 20 && mx <= bx + 140 && my >= by + 148 && my <= by + 170) {
           game.gold -= ship.applyUpgrade(ut);
+          playSound('buy');
+          return;
+        }
+      }
+
+      // Ammo clicks
+      const ammoY = uy + 200 + 10;
+      const ammoKeys = Object.keys(AMMO_TYPES);
+      for (let i = 0; i < ammoKeys.length; i++) {
+        const abx = 120 + i * 230;
+        if (mx >= abx && mx <= abx + 210 && my >= ammoY && my <= ammoY + 45) {
+          const at = AMMO_TYPES[ammoKeys[i]];
+          const owned = ammoKeys[i] === 'standard' || ship['has_' + ammoKeys[i]];
+          if (owned) {
+            ship.ammo = ammoKeys[i];
+          } else if (game.gold >= at.cost) {
+            game.gold -= at.cost;
+            ship['has_' + ammoKeys[i]] = true;
+            ship.ammo = ammoKeys[i];
+            playSound('buy');
+          }
           return;
         }
       }
@@ -1678,6 +2206,23 @@ function handleShopClick(mx, my) {
       }
     }
   }
+
+  if (game.shopTab === 'market') {
+    for (let i = 0; i < game.blackMarketOffers.length; i++) {
+      const o = game.blackMarketOffers[i];
+      const bx = W / 2 - 200;
+      const by = contentY + 50 + i * 65;
+      const bw = 400;
+      if (game.gold >= o.cost) {
+        if (mx >= bx + bw - 80 && mx <= bx + bw - 10 && my >= by + 12 && my <= by + 40) {
+          game.gold -= o.cost;
+          o.apply();
+          game.blackMarketOffers.splice(i, 1);
+          return;
+        }
+      }
+    }
+  }
 }
 
 // ============== GAME CLICK ==============
@@ -1692,6 +2237,8 @@ function handleGameClick(mx, my) {
         spawnExplosion(m.x, m.y, 20);
         addFloatingText(m.x, m.y - 15, 'INTERCEPTED!', '#44ff66');
         game.score += 50;
+        game.totalIntercepts++;
+        playSound('intercept');
         return;
       } else {
         if (game.noInterceptorTimer <= 0) {
@@ -1725,11 +2272,12 @@ function drawMenu() {
   ctx.fillText('Protect the convoy through the Strait of Hormuz', W / 2, 280);
   ctx.fillText('Your escort ships fight automatically in formation', W / 2, 305);
   ctx.fillText('Click to intercept incoming missiles', W / 2, 330);
-  ctx.fillText('Buy, upgrade, and manage your fleet between waves', W / 2, 355);
+  ctx.fillText('Press 1/2/3 for special skills (Air Strike, Repair, EMP)', W / 2, 355);
+  ctx.fillText('Weather changes each wave | Earn achievements for gold', W / 2, 380);
 
   // Start button
   const btnX = W / 2 - 100;
-  const btnY = 420;
+  const btnY = 440;
   ctx.fillStyle = '#1a4a2a';
   ctx.fillRect(btnX, btnY, 200, 50);
   ctx.strokeStyle = '#44ff66';
@@ -1741,7 +2289,7 @@ function drawMenu() {
 
   ctx.fillStyle = '#666666';
   ctx.font = '12px Segoe UI';
-  ctx.fillText('v1.0 - Escort Mission', W / 2, H - 20);
+  ctx.fillText('v2.0 - Enhanced Edition', W / 2, H - 20);
 }
 
 // ============== GAME OVER ==============
@@ -1786,9 +2334,10 @@ canvas.addEventListener('click', e => {
   const mx = (e.clientX - rect.left) * (W / rect.width);
   const my = (e.clientY - rect.top) * (H / rect.height);
 
+  initAudio();
   if (game.state === 'MENU') {
     const btnX = W / 2 - 100;
-    const btnY = 420;
+    const btnY = 440;
     if (mx >= btnX && mx <= btnX + 200 && my >= btnY && my <= btnY + 50) {
       startNewGame();
     }
@@ -1807,6 +2356,54 @@ canvas.addEventListener('click', e => {
 
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 
+document.addEventListener('keydown', e => {
+  if (game.state !== 'PLAYING') return;
+  for (const [id, sk] of Object.entries(SKILLS)) {
+    if (e.key === sk.key && game.wave >= sk.unlockWave && game.skillCooldowns[id] <= 0) {
+      activateSkill(id);
+      break;
+    }
+  }
+});
+
+function activateSkill(id) {
+  game.skillCooldowns[id] = SKILLS[id].cooldown;
+  playSound('skill');
+  if (id === 'airstrike') {
+    for (const e of game.enemies) {
+      e.hp -= 80;
+      if (e.hp <= 0) {
+        spawnExplosion(e.x, e.y, 15);
+        game.gold += e.gold;
+        game.score += e.gold;
+        game.waveGoldEarned += e.gold;
+        addFloatingText(e.x, e.y - 15, '+' + e.gold + 'g', '#ffd700');
+      } else {
+        spawnExplosion(e.x, e.y, 8);
+        addFloatingText(e.x, e.y - 15, '-80', '#ff8844');
+      }
+    }
+    game.notification = 'AIR STRIKE DEPLOYED!';
+    game.notificationTimer = 1.5;
+  } else if (id === 'repair') {
+    for (const s of game.escortShips) {
+      s.hp = Math.min(s.hp + 100, s.maxHp);
+    }
+    for (const c of game.convoyShips) {
+      if (c.hp > 0) c.hp = Math.min(c.hp + 100, c.maxHp);
+    }
+    game.notification = 'REPAIR DRONES DISPATCHED!';
+    game.notificationTimer = 1.5;
+  } else if (id === 'emp') {
+    game.empActive = 3;
+    for (const e of game.enemies) {
+      addFloatingText(e.x, e.y - 15, 'STUNNED!', '#88aaff');
+    }
+    game.notification = 'EMP BLAST ACTIVATED!';
+    game.notificationTimer = 1.5;
+  }
+}
+
 // ============== START ==============
 function startNewGame() {
   game.state = 'PLAYING';
@@ -1820,6 +2417,15 @@ function startNewGame() {
   game.escortShips.push(new EscortShip('patrol'));
   game.retryAvailable = false;
   game.noInterceptorTimer = 0;
+  game.totalKills = 0;
+  game.totalIntercepts = 0;
+  game.hadPerfectWave = false;
+  game.bossKills = 0;
+  game.unlockedAchievements = new Set();
+  game.achievementPopup = null;
+  game.achievementPopupTimer = 0;
+  game.skillCooldowns = { airstrike: 0, repair: 0, emp: 0 };
+  game.empActive = 0;
   setupWave(1);
 }
 
@@ -1834,6 +2440,7 @@ function gameLoop(timestamp) {
   } else if (game.state === 'PLAYING') {
     updateGame(dt);
     drawOcean();
+    drawWeather(dt);
     // Draw convoy
     for (const c of game.convoyShips) {
       if (c.hp > 0) c.draw();
@@ -1893,6 +2500,26 @@ function gameLoop(timestamp) {
         ctx.fillStyle = '#88ddff';
         ctx.fillText('Convoy Survived: ' + game.survivedConvoy + '/' + game.totalConvoy, W / 2, H / 2 + 50);
       }
+      ctx.globalAlpha = 1;
+    }
+
+    // Achievement popup
+    if (game.achievementPopup && game.achievementPopupTimer > 0) {
+      const ap = game.achievementPopup;
+      const alpha = Math.min(1, game.achievementPopupTimer);
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = 'rgba(40,30,0,0.85)';
+      ctx.fillRect(W / 2 - 160, 50, 320, 50);
+      ctx.strokeStyle = '#ffd700';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(W / 2 - 160, 50, 320, 50);
+      ctx.fillStyle = '#ffd700';
+      ctx.font = 'bold 13px Segoe UI';
+      ctx.textAlign = 'center';
+      ctx.fillText('ACHIEVEMENT: ' + ap.name, W / 2, 72);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '11px Segoe UI';
+      ctx.fillText(ap.desc + ' (+' + ap.reward + 'g)', W / 2, 90);
       ctx.globalAlpha = 1;
     }
 
