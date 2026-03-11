@@ -1,0 +1,1920 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hormuz War - Naval Escort Commander</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #0a0a1a;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  overflow: hidden;
+}
+canvas {
+  border: 2px solid #1a3a5c;
+  box-shadow: 0 0 30px rgba(0,100,200,0.3);
+  cursor: default;
+}
+</style>
+</head>
+<body>
+<canvas id="gameCanvas" width="900" height="700"></canvas>
+<script>
+"use strict";
+
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const W = 900, H = 700;
+
+// ============== UTILITY ==============
+function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+function lerp(a, b, t) { return a + (b - a) * t; }
+function clamp(v, mn, mx) { return Math.max(mn, Math.min(mx, v)); }
+function rand(a, b) { return Math.random() * (b - a) + a; }
+function randInt(a, b) { return Math.floor(rand(a, b + 1)); }
+function angleTo(a, b) { return Math.atan2(b.y - a.y, b.x - a.x); }
+
+// ============== CONSTANTS ==============
+const SHIP_TYPES = {
+  patrol: { name: 'Patrol Boat', cost: 100, speed: 3.5, hp: 100, damage: 8, fireRate: 0.4, range: 180, color: '#2d8a4e', size: 12, tier: 1 },
+  frigate: { name: 'Frigate', cost: 500, speed: 2.8, hp: 250, damage: 15, fireRate: 0.55, range: 220, color: '#1e6b3a', size: 16, tier: 2 },
+  destroyer: { name: 'Destroyer', cost: 1500, speed: 2.2, hp: 500, damage: 30, fireRate: 0.7, range: 280, color: '#0f5c2e', size: 22, tier: 3 },
+  cruiser: { name: 'Cruiser', cost: 5000, speed: 1.8, hp: 1000, damage: 55, fireRate: 1.0, range: 350, color: '#0a4420', size: 28, tier: 4 },
+};
+
+const ENEMY_DEFS = {
+  speedboat: { name: 'Speed Boat', speed: 3.2, hp: 40, damage: 5, fireRate: 0.8, range: 120, color: '#cc3333', size: 10, gold: 15, minWave: 1 },
+  gunboat: { name: 'Gunboat', speed: 2.2, hp: 100, damage: 12, fireRate: 0.6, range: 160, color: '#aa2222', size: 14, gold: 30, minWave: 2 },
+  drone: { name: 'Drone', speed: 4.0, hp: 25, damage: 8, fireRate: 0.5, range: 100, color: '#dd5555', size: 8, gold: 40, minWave: 3 },
+  mine: { name: 'Mine', speed: 0, hp: 30, damage: 80, fireRate: 0, range: 40, color: '#666666', size: 10, gold: 20, minWave: 4 },
+  enemyDestroyer: { name: 'Enemy Destroyer', speed: 1.4, hp: 300, damage: 25, fireRate: 0.8, range: 220, color: '#881111', size: 22, gold: 80, minWave: 5 },
+  boss: { name: 'Boss Ship', speed: 1.0, hp: 800, damage: 40, fireRate: 0.5, range: 280, color: '#ff0000', size: 32, gold: 200, minWave: 5 },
+};
+
+const CONVOY_DEFS = {
+  tanker: { name: 'Oil Tanker', speed: 0.2, hp: 400, color: '#4477aa', size: 30, goldBonus: 200 },
+  cargo: { name: 'Cargo Ship', speed: 0.25, hp: 300, color: '#6688aa', size: 24, goldBonus: 150 },
+};
+
+const SLOT_UPGRADES = [
+  { slot: 4, waveReq: 5, cost: 1000 },
+  { slot: 5, waveReq: 8, cost: 2000 },
+  { slot: 6, waveReq: 12, cost: 4000 },
+  { slot: 7, waveReq: 16, cost: 8000 },
+  { slot: 8, waveReq: 20, cost: 15000 },
+];
+
+const UPGRADE_DEFS = {
+  hull: { name: 'Hull Armor', desc: '+50 HP per level', baseCost: 100, maxLevel: 5 },
+  damage: { name: 'Weapon Damage', desc: '+25% per level', baseCost: 150, maxLevel: 5 },
+  fireRate: { name: 'Fire Rate', desc: '+20% per level', baseCost: 120, maxLevel: 5 },
+  range: { name: 'Attack Range', desc: '+15% per level', baseCost: 100, maxLevel: 5 },
+};
+
+// ============== GAME STATE ==============
+const game = {
+  state: 'MENU',
+  gold: 300,
+  score: 0,
+  wave: 0,
+  time: 0,
+  dt: 0,
+  escortShips: [],
+  convoyShips: [],
+  enemies: [],
+  projectiles: [],
+  explosions: [],
+  floatingTexts: [],
+  particles: [],
+  missiles: [],
+  missileWarnings: [],
+  interceptorMissiles: 5,
+  maxSlots: 3,
+  failedWaves: 0,
+  maxFails: 3,
+  waveTimer: 0,
+  waveEnemiesLeft: 0,
+  waveSpawnTimer: 0,
+  waveSpawnQueue: [],
+  waveComplete: false,
+  waveCompleteTimer: 0,
+  waveFailed: false,
+  notification: null,
+  notificationTimer: 0,
+  mouseX: 0,
+  mouseY: 0,
+  waterOffset: 0,
+  totalConvoy: 0,
+  survivedConvoy: 0,
+  waveGoldEarned: 0,
+  missileTimer: 0,
+  missileNearCursor: false,
+  noInterceptorTimer: 0,
+  shopTab: 'buy',
+  shopSelectedShip: -1,
+  retryAvailable: false,
+  lastWaveConfig: null,
+};
+
+// ============== CLASSES ==============
+class EscortShip {
+  constructor(type) {
+    const def = SHIP_TYPES[type];
+    this.type = type;
+    this.name = def.name;
+    this.x = W / 2;
+    this.y = H / 2;
+    this.baseSpeed = def.speed;
+    this.baseHp = def.hp;
+    this.baseDamage = def.damage;
+    this.baseFireRate = def.fireRate;
+    this.baseRange = def.range;
+    this.color = def.color;
+    this.size = def.size;
+    this.cost = def.cost;
+    this.tier = def.tier;
+    this.upgrades = { hull: 0, damage: 0, fireRate: 0, range: 0 };
+    this.totalInvested = def.cost;
+    this.hp = this.getMaxHp();
+    this.maxHp = this.hp;
+    this.fireCooldown = 0;
+    this.angle = -Math.PI / 2;
+    this.targetX = this.x;
+    this.targetY = this.y;
+    this.id = Math.random().toString(36).substr(2, 9);
+  }
+  getMaxHp() { return this.baseHp + this.upgrades.hull * 50; }
+  getDamage() { return this.baseDamage * (1 + this.upgrades.damage * 0.25); }
+  getFireRate() { return this.baseFireRate / (1 + this.upgrades.fireRate * 0.20); }
+  getRange() { return this.baseRange * (1 + this.upgrades.range * 0.15); }
+  getSpeed() { return this.baseSpeed; }
+  getUpgradeCost(upgradeType) {
+    const def = UPGRADE_DEFS[upgradeType];
+    return def.baseCost * Math.pow(2, this.upgrades[upgradeType]);
+  }
+  applyUpgrade(upgradeType) {
+    const cost = this.getUpgradeCost(upgradeType);
+    this.upgrades[upgradeType]++;
+    this.totalInvested += cost;
+    this.maxHp = this.getMaxHp();
+    this.hp = Math.min(this.hp + 50, this.maxHp);
+    return cost;
+  }
+  getSellPrice() { return Math.floor(this.totalInvested * 0.4); }
+  update(dt) {
+    const dx = this.targetX - this.x;
+    const dy = this.targetY - this.y;
+    const d = Math.hypot(dx, dy);
+    if (d > 3) {
+      const speed = this.getSpeed() * 60 * dt;
+      const move = Math.min(speed, d);
+      this.x += (dx / d) * move;
+      this.y += (dy / d) * move;
+      this.angle = Math.atan2(dy, dx);
+    }
+    this.x = clamp(this.x, this.size, W - this.size);
+    this.y = clamp(this.y, this.size, H - this.size);
+    if (this.fireCooldown > 0) this.fireCooldown -= dt;
+  }
+  tryFire(enemies) {
+    if (this.fireCooldown > 0) return;
+    const range = this.getRange();
+    let nearest = null;
+    let nearDist = Infinity;
+    for (const e of enemies) {
+      const d = dist(this, e);
+      if (d < range && d < nearDist) {
+        nearest = e;
+        nearDist = d;
+      }
+    }
+    if (nearest) {
+      this.fireCooldown = this.getFireRate();
+      this.angle = angleTo(this, nearest);
+      game.projectiles.push(new Projectile(this.x, this.y, nearest, this.getDamage(), '#44ff66', true));
+    }
+  }
+  draw() {
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.rotate(this.angle + Math.PI / 2);
+    ctx.fillStyle = this.color;
+    ctx.beginPath();
+    ctx.moveTo(0, -this.size);
+    ctx.lineTo(-this.size * 0.5, this.size * 0.6);
+    ctx.lineTo(this.size * 0.5, this.size * 0.6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = '#aaffaa';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.fillRect(-this.size * 0.2, -this.size * 0.4, this.size * 0.4, this.size * 0.6);
+    ctx.restore();
+    this.drawHpBar();
+  }
+  drawHpBar() {
+    const bw = this.size * 1.5;
+    const bh = 3;
+    const bx = this.x - bw / 2;
+    const by = this.y - this.size - 6;
+    ctx.fillStyle = '#333';
+    ctx.fillRect(bx, by, bw, bh);
+    const ratio = this.hp / this.maxHp;
+    ctx.fillStyle = ratio > 0.5 ? '#44ff44' : ratio > 0.25 ? '#ffaa00' : '#ff3333';
+    ctx.fillRect(bx, by, bw * ratio, bh);
+  }
+}
+
+class ConvoyShip {
+  constructor(type, x, y) {
+    const def = CONVOY_DEFS[type];
+    this.type = type;
+    this.name = def.name;
+    this.x = x;
+    this.y = y;
+    this.speed = def.speed;
+    this.hp = def.hp;
+    this.maxHp = def.hp;
+    this.color = def.color;
+    this.size = def.size;
+    this.goldBonus = def.goldBonus;
+    this.angle = -Math.PI / 2;
+    this.alive = true;
+  }
+  update(dt) {
+    this.y -= this.speed * 60 * dt;
+  }
+  draw() {
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.rotate(this.angle + Math.PI / 2);
+    ctx.fillStyle = this.color;
+    ctx.beginPath();
+    ctx.moveTo(0, -this.size);
+    ctx.lineTo(-this.size * 0.4, -this.size * 0.5);
+    ctx.lineTo(-this.size * 0.4, this.size * 0.6);
+    ctx.lineTo(this.size * 0.4, this.size * 0.6);
+    ctx.lineTo(this.size * 0.4, -this.size * 0.5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = '#88aacc';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.1)';
+    ctx.fillRect(-this.size * 0.25, -this.size * 0.3, this.size * 0.5, this.size * 0.7);
+    ctx.restore();
+    const bw = this.size * 1.5;
+    const bh = 4;
+    const bx = this.x - bw / 2;
+    const by = this.y - this.size - 8;
+    ctx.fillStyle = '#333';
+    ctx.fillRect(bx, by, bw, bh);
+    const ratio = this.hp / this.maxHp;
+    ctx.fillStyle = ratio > 0.5 ? '#4488ff' : ratio > 0.25 ? '#ffaa00' : '#ff3333';
+    ctx.fillRect(bx, by, bw * ratio, bh);
+    ctx.fillStyle = '#aaccee';
+    ctx.font = '9px Segoe UI';
+    ctx.textAlign = 'center';
+    ctx.fillText(this.name, this.x, by - 2);
+  }
+}
+
+class Enemy {
+  constructor(type, x, y) {
+    const def = ENEMY_DEFS[type];
+    this.type = type;
+    this.name = def.name;
+    this.x = x;
+    this.y = y;
+    this.speed = def.speed;
+    this.hp = def.hp;
+    this.maxHp = def.hp;
+    this.damage = def.damage;
+    this.fireRate = def.fireRate;
+    this.range = def.range;
+    this.color = def.color;
+    this.size = def.size;
+    this.gold = def.gold;
+    this.fireCooldown = rand(0, this.fireRate);
+    this.angle = Math.PI / 2;
+    this.isMine = type === 'mine';
+    this.isBoss = type === 'boss';
+    this.isDrone = type === 'drone';
+    this.mineFlash = 0;
+  }
+  update(dt) {
+    if (this.isMine) {
+      this.mineFlash += dt * 3;
+      return;
+    }
+    let target = null;
+    let minD = Infinity;
+    const targets = this.isDrone ? game.convoyShips : [...game.convoyShips, ...game.escortShips];
+    for (const t of targets) {
+      if (t.hp <= 0) continue;
+      const d = dist(this, t);
+      if (d < minD) { minD = d; target = t; }
+    }
+    if (!target) {
+      for (const c of game.convoyShips) {
+        if (c.hp > 0) { target = c; break; }
+      }
+    }
+    if (target) {
+      const d = dist(this, target);
+      this.angle = angleTo(this, target);
+      if (d > this.range * 0.7) {
+        this.x += Math.cos(this.angle) * this.speed * 60 * dt;
+        this.y += Math.sin(this.angle) * this.speed * 60 * dt;
+      }
+      if (this.fireRate > 0 && d < this.range) {
+        this.fireCooldown -= dt;
+        if (this.fireCooldown <= 0) {
+          this.fireCooldown = this.fireRate;
+          game.projectiles.push(new Projectile(this.x, this.y, target, this.damage, '#ff4444', false));
+        }
+      }
+    }
+    if (this.isMine) {
+      for (const c of game.convoyShips) {
+        if (c.hp > 0 && dist(this, c) < 50) {
+          c.hp -= this.damage;
+          spawnExplosion(this.x, this.y, 30);
+          this.hp = 0;
+          break;
+        }
+      }
+    }
+    this.x = clamp(this.x, -50, W + 50);
+    this.y = clamp(this.y, -50, H + 50);
+  }
+  draw() {
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    if (this.isMine) {
+      const flash = Math.sin(this.mineFlash) > 0 ? 1.2 : 1;
+      ctx.fillStyle = this.color;
+      ctx.beginPath();
+      ctx.arc(0, 0, this.size * flash, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#ff0000';
+      ctx.beginPath();
+      ctx.arc(0, 0, 3, 0, Math.PI * 2);
+      ctx.fill();
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        ctx.strokeStyle = '#888';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(a) * this.size, Math.sin(a) * this.size);
+        ctx.lineTo(Math.cos(a) * (this.size + 5), Math.sin(a) * (this.size + 5));
+        ctx.stroke();
+      }
+    } else {
+      ctx.rotate(this.angle + Math.PI / 2);
+      ctx.fillStyle = this.color;
+      ctx.beginPath();
+      ctx.moveTo(0, -this.size);
+      ctx.lineTo(-this.size * 0.5, this.size * 0.5);
+      ctx.lineTo(this.size * 0.5, this.size * 0.5);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = '#ffaaaa';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      if (this.isBoss) {
+        ctx.fillStyle = 'rgba(255,0,0,0.3)';
+        ctx.beginPath();
+        ctx.arc(0, 0, this.size * 1.3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+    if (!this.isMine) {
+      const bw = this.size * 1.5;
+      const bh = 3;
+      const bx = this.x - bw / 2;
+      const by = this.y - this.size - 6;
+      ctx.fillStyle = '#333';
+      ctx.fillRect(bx, by, bw, bh);
+      ctx.fillStyle = '#ff4444';
+      ctx.fillRect(bx, by, bw * (this.hp / this.maxHp), bh);
+    }
+  }
+}
+
+class Projectile {
+  constructor(x, y, target, damage, color, isPlayerSide) {
+    this.x = x;
+    this.y = y;
+    const angle = angleTo({x, y}, target);
+    this.speed = 7;
+    this.vx = Math.cos(angle) * this.speed;
+    this.vy = Math.sin(angle) * this.speed;
+    this.damage = damage;
+    this.color = color;
+    this.isPlayerSide = isPlayerSide;
+    this.life = 3;
+    this.size = 3;
+  }
+  update(dt) {
+    this.x += this.vx * 60 * dt;
+    this.y += this.vy * 60 * dt;
+    this.life -= dt;
+  }
+  draw() {
+    ctx.fillStyle = this.color;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = this.isPlayerSide ? 'rgba(68,255,102,0.3)' : 'rgba(255,68,68,0.3)';
+    ctx.beginPath();
+    ctx.arc(this.x - this.vx * 0.1, this.y - this.vy * 0.1, this.size * 0.7, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+class Missile {
+  constructor(targetShip) {
+    this.target = targetShip;
+    const side = randInt(0, 2);
+    if (side === 0) { this.x = rand(50, W - 50); this.y = -30; }
+    else if (side === 1) { this.x = -30; this.y = rand(50, H * 0.5); }
+    else { this.x = W + 30; this.y = rand(50, H * 0.5); }
+    this.speed = 3.5;
+    this.angle = angleTo(this, targetShip);
+    this.vx = Math.cos(this.angle) * this.speed;
+    this.vy = Math.sin(this.angle) * this.speed;
+    this.damage = 150;
+    this.alive = true;
+    this.size = 8;
+    this.trail = [];
+    this.warningTime = 2.0;
+    this.launched = false;
+    this.warnX = this.x;
+    this.warnY = this.y;
+    if (side === 0) { this.warnX = this.x; this.warnY = 20; this.warnAngle = Math.PI / 2; }
+    else if (side === 1) { this.warnX = 20; this.warnY = this.y; this.warnAngle = 0; }
+    else { this.warnX = W - 20; this.warnY = this.y; this.warnAngle = Math.PI; }
+  }
+  update(dt) {
+    if (!this.launched) {
+      this.warningTime -= dt;
+      if (this.warningTime <= 0) this.launched = true;
+      return;
+    }
+    if (this.target && this.target.hp > 0) {
+      const desired = angleTo(this, this.target);
+      let diff = desired - this.angle;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      this.angle += diff * 0.02;
+    }
+    this.vx = Math.cos(this.angle) * this.speed;
+    this.vy = Math.sin(this.angle) * this.speed;
+    this.x += this.vx * 60 * dt;
+    this.y += this.vy * 60 * dt;
+    this.trail.push({ x: this.x, y: this.y, life: 0.5 });
+    if (this.trail.length > 20) this.trail.shift();
+    for (const t of this.trail) t.life -= dt;
+    this.trail = this.trail.filter(t => t.life > 0);
+    for (const c of game.convoyShips) {
+      if (c.hp > 0 && dist(this, c) < c.size) {
+        c.hp -= this.damage;
+        this.alive = false;
+        spawnExplosion(this.x, this.y, 25);
+        addFloatingText(c.x, c.y - 20, '-' + this.damage + ' HP!', '#ff3333');
+        break;
+      }
+    }
+    if (this.x < -100 || this.x > W + 100 || this.y < -100 || this.y > H + 100) {
+      this.alive = false;
+    }
+  }
+  draw() {
+    if (!this.launched) {
+      const flash = Math.sin(game.time * 10) > 0;
+      if (flash) {
+        ctx.save();
+        ctx.translate(this.warnX, this.warnY);
+        ctx.rotate(this.warnAngle);
+        ctx.fillStyle = '#ff0000';
+        ctx.beginPath();
+        ctx.moveTo(12, 0);
+        ctx.lineTo(-6, -8);
+        ctx.lineTo(-6, 8);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 10px Segoe UI';
+        ctx.textAlign = 'center';
+        ctx.fillText('MISSILE!', 0, -14);
+        ctx.restore();
+      }
+      return;
+    }
+    for (let i = 0; i < this.trail.length; i++) {
+      const t = this.trail[i];
+      const alpha = (i / this.trail.length) * 0.6;
+      ctx.fillStyle = `rgba(255,${100 + i * 5},0,${alpha})`;
+      ctx.beginPath();
+      ctx.arc(t.x, t.y, 3 - (i / this.trail.length) * 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.rotate(this.angle + Math.PI / 2);
+    ctx.fillStyle = '#ff4400';
+    ctx.beginPath();
+    ctx.moveTo(0, -this.size);
+    ctx.lineTo(-4, this.size * 0.5);
+    ctx.lineTo(4, this.size * 0.5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#ffaa00';
+    ctx.beginPath();
+    ctx.moveTo(-3, this.size * 0.5);
+    ctx.lineTo(0, this.size);
+    ctx.lineTo(3, this.size * 0.5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+    if (this.launched) {
+      ctx.fillStyle = Math.sin(game.time * 8) > 0 ? '#ffff00' : '#ff8800';
+      ctx.font = 'bold 10px Segoe UI';
+      ctx.textAlign = 'center';
+      ctx.fillText('CLICK TO INTERCEPT!', this.x, this.y - 18);
+    }
+  }
+}
+
+class Explosion {
+  constructor(x, y, size) {
+    this.x = x;
+    this.y = y;
+    this.size = size;
+    this.life = 0.6;
+    this.maxLife = 0.6;
+    this.particles = [];
+    for (let i = 0; i < size; i++) {
+      this.particles.push({
+        x: 0, y: 0,
+        vx: rand(-3, 3), vy: rand(-3, 3),
+        life: rand(0.2, 0.6),
+        size: rand(1, 4),
+        color: ['#ff4400', '#ffaa00', '#ff6600', '#ffdd00'][randInt(0, 3)]
+      });
+    }
+  }
+  update(dt) {
+    this.life -= dt;
+    for (const p of this.particles) {
+      p.x += p.vx * 60 * dt;
+      p.y += p.vy * 60 * dt;
+      p.life -= dt;
+      p.vx *= 0.96;
+      p.vy *= 0.96;
+    }
+  }
+  draw() {
+    const alpha = this.life / this.maxLife;
+    for (const p of this.particles) {
+      if (p.life <= 0) continue;
+      ctx.globalAlpha = p.life * alpha;
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(this.x + p.x, this.y + p.y, p.size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    if (alpha > 0.3) {
+      ctx.fillStyle = `rgba(255,200,50,${alpha * 0.5})`;
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.size * alpha * 0.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+}
+
+// ============== HELPERS ==============
+function spawnExplosion(x, y, size) {
+  game.explosions.push(new Explosion(x, y, size || 15));
+}
+
+function addFloatingText(x, y, text, color) {
+  game.floatingTexts.push({ x, y, text, color: color || '#fff', life: 1.5 });
+}
+
+function getConvoyCenter() {
+  let cx = 0, cy = 0, count = 0;
+  for (const c of game.convoyShips) {
+    if (c.hp > 0) { cx += c.x; cy += c.y; count++; }
+  }
+  if (count === 0) return { x: W / 2, y: H / 2 };
+  return { x: cx / count, y: cy / count };
+}
+
+function updateFormation() {
+  const center = getConvoyCenter();
+  const ships = game.escortShips;
+  const n = ships.length;
+  if (n === 0) return;
+  const radius = 90;
+  if (n === 1) {
+    ships[0].targetX = center.x;
+    ships[0].targetY = center.y - radius;
+  } else if (n === 2) {
+    ships[0].targetX = center.x;
+    ships[0].targetY = center.y - radius;
+    ships[1].targetX = center.x;
+    ships[1].targetY = center.y + radius;
+  } else if (n === 3) {
+    ships[0].targetX = center.x;
+    ships[0].targetY = center.y - radius;
+    ships[1].targetX = center.x - radius * 0.87;
+    ships[1].targetY = center.y + radius * 0.5;
+    ships[2].targetX = center.x + radius * 0.87;
+    ships[2].targetY = center.y + radius * 0.5;
+  } else if (n === 4) {
+    ships[0].targetX = center.x;
+    ships[0].targetY = center.y - radius;
+    ships[1].targetX = center.x;
+    ships[1].targetY = center.y + radius;
+    ships[2].targetX = center.x - radius;
+    ships[2].targetY = center.y;
+    ships[3].targetX = center.x + radius;
+    ships[3].targetY = center.y;
+  } else {
+    for (let i = 0; i < n; i++) {
+      const angle = (i / n) * Math.PI * 2 - Math.PI / 2;
+      ships[i].targetX = center.x + Math.cos(angle) * radius;
+      ships[i].targetY = center.y + Math.sin(angle) * radius;
+    }
+  }
+}
+
+function getMissileInterval() {
+  const w = game.wave;
+  if (w < 3) return Infinity;
+  if (w <= 5) return rand(8, 12);
+  if (w <= 10) return rand(5, 8);
+  if (w <= 15) return rand(3, 6);
+  return rand(2, 4);
+}
+
+function spawnMissile() {
+  const aliveConvoy = game.convoyShips.filter(c => c.hp > 0);
+  if (aliveConvoy.length === 0) return;
+  const target = aliveConvoy[randInt(0, aliveConvoy.length - 1)];
+  game.missiles.push(new Missile(target));
+}
+
+// ============== WAVE SETUP ==============
+function setupWave(waveNum) {
+  game.wave = waveNum;
+  game.waveComplete = false;
+  game.waveCompleteTimer = 0;
+  game.waveFailed = false;
+  game.waveGoldEarned = 0;
+  game.waveSpawnQueue = [];
+  game.waveSpawnTimer = 0;
+  game.enemies = [];
+  game.projectiles = [];
+  game.missiles = [];
+  game.explosions = [];
+  game.missileTimer = getMissileInterval();
+
+  // Convoy setup
+  game.convoyShips = [];
+  const numConvoy = Math.min(2 + Math.floor(waveNum / 5), 5);
+  game.totalConvoy = numConvoy;
+  game.survivedConvoy = 0;
+  for (let i = 0; i < numConvoy; i++) {
+    const type = i % 2 === 0 ? 'tanker' : 'cargo';
+    const x = W / 2 + (i - (numConvoy - 1) / 2) * 60;
+    const y = H - 80;
+    game.convoyShips.push(new ConvoyShip(type, x, y));
+  }
+
+  // Enemy queue
+  const baseEnemies = 3 + waveNum * 2;
+  const enemyTypes = Object.keys(ENEMY_DEFS).filter(t => ENEMY_DEFS[t].minWave <= waveNum);
+
+  for (let i = 0; i < baseEnemies; i++) {
+    const type = enemyTypes[randInt(0, enemyTypes.length - 1)];
+    game.waveSpawnQueue.push(type);
+  }
+
+  // Boss every 5 waves
+  if (waveNum % 5 === 0 && waveNum >= 5) {
+    game.waveSpawnQueue.push('boss');
+  }
+
+  game.waveEnemiesLeft = game.waveSpawnQueue.length;
+
+  // Heal escort ships
+  for (const ship of game.escortShips) {
+    ship.hp = ship.maxHp;
+    ship.fireCooldown = 0;
+  }
+
+  // Save config for retry
+  game.lastWaveConfig = {
+    waveNum: waveNum,
+    gold: game.gold,
+    score: game.score,
+  };
+
+  updateFormation();
+}
+
+function spawnNextEnemy() {
+  if (game.waveSpawnQueue.length === 0) return;
+  const type = game.waveSpawnQueue.shift();
+  const side = randInt(0, 3);
+  let x, y;
+  if (side === 0) { x = rand(50, W - 50); y = -30; }
+  else if (side === 1) { x = rand(50, W - 50); y = H + 30; }
+  else if (side === 2) { x = -30; y = rand(50, H - 50); }
+  else { x = W + 30; y = rand(50, H - 50); }
+
+  if (type === 'mine') {
+    const center = getConvoyCenter();
+    x = center.x + rand(-200, 200);
+    y = center.y + rand(-150, -50);
+    x = clamp(x, 50, W - 50);
+    y = clamp(y, 50, H - 50);
+  }
+
+  const enemy = new Enemy(type, x, y);
+  // Scale HP with wave
+  const scale = 1 + (game.wave - 1) * 0.1;
+  enemy.hp = Math.floor(enemy.hp * scale);
+  enemy.maxHp = enemy.hp;
+  game.enemies.push(enemy);
+}
+
+// ============== DRAWING ==============
+function drawOcean() {
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, '#0a1628');
+  grad.addColorStop(0.5, '#0d1f3c');
+  grad.addColorStop(1, '#102a50');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  game.waterOffset += game.dt * 15;
+  ctx.globalAlpha = 0.08;
+  for (let y = 0; y < H; y += 40) {
+    const offset = Math.sin((y + game.waterOffset) * 0.02) * 20;
+    ctx.strokeStyle = '#3366aa';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let x = 0; x < W; x += 5) {
+      const yy = y + Math.sin((x + offset) * 0.03) * 8;
+      if (x === 0) ctx.moveTo(x, yy);
+      else ctx.lineTo(x, yy);
+    }
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawHUD() {
+  // Top bar
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(0, 0, W, 36);
+  ctx.strokeStyle = 'rgba(100,150,200,0.3)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, 36);
+  ctx.lineTo(W, 36);
+  ctx.stroke();
+
+  ctx.font = 'bold 14px Segoe UI';
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#ffd700';
+  ctx.fillText('Gold: ' + game.gold, 10, 24);
+
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText('Wave: ' + game.wave, 150, 24);
+
+  ctx.fillStyle = '#44aaff';
+  ctx.fillText('Score: ' + game.score, 280, 24);
+
+  ctx.fillStyle = '#ff6644';
+  const livesLeft = game.maxFails - game.failedWaves;
+  ctx.fillText('Lives: ' + livesLeft, 420, 24);
+
+  ctx.fillStyle = '#88ddff';
+  ctx.fillText('Ships: ' + game.escortShips.length + '/' + game.maxSlots, 550, 24);
+
+  ctx.fillStyle = '#ffaa44';
+  ctx.fillText('Interceptors: ' + game.interceptorMissiles, 700, 24);
+
+  // Convoy status
+  const alive = game.convoyShips.filter(c => c.hp > 0).length;
+  ctx.fillStyle = alive > 0 ? '#44ff88' : '#ff4444';
+  ctx.textAlign = 'right';
+  ctx.fillText('Convoy: ' + alive + '/' + game.totalConvoy, W - 10, 24);
+}
+
+function drawMinimap() {
+  const mx = W - 110, my = 46, mw = 100, mh = 80;
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(mx, my, mw, mh);
+  ctx.strokeStyle = 'rgba(100,150,200,0.3)';
+  ctx.strokeRect(mx, my, mw, mh);
+
+  const sx = mw / W, sy = mh / H;
+
+  // Convoy
+  for (const c of game.convoyShips) {
+    if (c.hp <= 0) continue;
+    ctx.fillStyle = '#4488ff';
+    ctx.fillRect(mx + c.x * sx - 1, my + c.y * sy - 1, 3, 3);
+  }
+
+  // Escorts
+  for (const s of game.escortShips) {
+    ctx.fillStyle = '#44ff44';
+    ctx.fillRect(mx + s.x * sx - 1, my + s.y * sy - 1, 3, 3);
+  }
+
+  // Enemies
+  for (const e of game.enemies) {
+    ctx.fillStyle = '#ff4444';
+    ctx.fillRect(mx + e.x * sx - 1, my + e.y * sy - 1, 2, 2);
+  }
+
+  // Missiles
+  for (const m of game.missiles) {
+    if (m.launched) {
+      ctx.fillStyle = '#ff8800';
+      ctx.fillRect(mx + m.x * sx - 1, my + m.y * sy - 1, 2, 2);
+    }
+  }
+}
+
+// ============== GAME UPDATE ==============
+function updateGame(dt) {
+  game.time += dt;
+  game.dt = dt;
+
+  // Convoy movement
+  for (const c of game.convoyShips) {
+    if (c.hp > 0) c.update(dt);
+  }
+
+  // Check convoy death
+  for (const c of game.convoyShips) {
+    if (c.hp <= 0 && c.alive) {
+      c.alive = false;
+      spawnExplosion(c.x, c.y, 30);
+      addFloatingText(c.x, c.y - 30, c.name + ' DESTROYED!', '#ff4444');
+    }
+  }
+
+  // Formation update
+  updateFormation();
+
+  // Escort ships
+  for (const ship of game.escortShips) {
+    ship.update(dt);
+    ship.tryFire(game.enemies);
+  }
+
+  // Spawn enemies
+  game.waveSpawnTimer -= dt;
+  if (game.waveSpawnTimer <= 0 && game.waveSpawnQueue.length > 0) {
+    spawnNextEnemy();
+    game.waveSpawnTimer = rand(1.5, 3.5);
+  }
+
+  // Update enemies
+  for (const e of game.enemies) {
+    e.update(dt);
+    // Mine proximity check
+    if (e.isMine) {
+      for (const c of game.convoyShips) {
+        if (c.hp > 0 && dist(e, c) < 50) {
+          c.hp -= e.damage;
+          spawnExplosion(e.x, e.y, 30);
+          addFloatingText(c.x, c.y - 20, '-' + e.damage + ' MINE!', '#ff8800');
+          e.hp = 0;
+          break;
+        }
+      }
+    }
+  }
+
+  // Projectiles
+  for (const p of game.projectiles) {
+    p.update(dt);
+    if (p.isPlayerSide) {
+      for (const e of game.enemies) {
+        if (e.hp > 0 && dist(p, e) < e.size) {
+          e.hp -= p.damage;
+          p.life = 0;
+          if (e.hp <= 0) {
+            spawnExplosion(e.x, e.y, 15);
+            game.gold += e.gold;
+            game.score += e.gold;
+            game.waveGoldEarned += e.gold;
+            addFloatingText(e.x, e.y - 15, '+' + e.gold + 'g', '#ffd700');
+          }
+          break;
+        }
+      }
+    } else {
+      for (const s of game.escortShips) {
+        if (dist(p, s) < s.size) {
+          s.hp -= p.damage;
+          p.life = 0;
+          if (s.hp <= 0) {
+            spawnExplosion(s.x, s.y, 20);
+            addFloatingText(s.x, s.y - 15, s.name + ' SUNK!', '#ff6644');
+          }
+          break;
+        }
+      }
+      for (const c of game.convoyShips) {
+        if (c.hp > 0 && dist(p, c) < c.size) {
+          c.hp -= p.damage;
+          p.life = 0;
+          break;
+        }
+      }
+    }
+  }
+
+  // Remove dead
+  game.enemies = game.enemies.filter(e => e.hp > 0);
+  game.projectiles = game.projectiles.filter(p => p.life > 0);
+  game.escortShips = game.escortShips.filter(s => s.hp > 0);
+  game.explosions = game.explosions.filter(e => e.life > 0);
+
+  // Explosions
+  for (const e of game.explosions) e.update(dt);
+
+  // Floating texts
+  for (const ft of game.floatingTexts) {
+    ft.y -= 30 * dt;
+    ft.life -= dt;
+  }
+  game.floatingTexts = game.floatingTexts.filter(ft => ft.life > 0);
+
+  // Missiles
+  game.missileTimer -= dt;
+  if (game.missileTimer <= 0 && !game.waveComplete) {
+    spawnMissile();
+    game.missileTimer = getMissileInterval();
+  }
+
+  for (const m of game.missiles) {
+    m.update(dt);
+  }
+  game.missiles = game.missiles.filter(m => m.alive);
+
+  // Check for missile near cursor
+  game.missileNearCursor = false;
+  for (const m of game.missiles) {
+    if (m.launched && dist({ x: game.mouseX, y: game.mouseY }, m) < 60) {
+      game.missileNearCursor = true;
+      break;
+    }
+  }
+
+  // Wave completion check
+  const allEnemiesDead = game.enemies.length === 0 && game.waveSpawnQueue.length === 0;
+  const allConvoyDead = game.convoyShips.every(c => c.hp <= 0);
+  const allConvoyPassed = game.convoyShips.some(c => c.hp > 0 && c.y < -50);
+
+  if (!game.waveComplete && !game.waveFailed) {
+    if (allConvoyDead) {
+      game.waveFailed = true;
+      game.failedWaves++;
+      game.notification = 'CONVOY DESTROYED! Lives remaining: ' + (game.maxFails - game.failedWaves);
+      game.notificationTimer = 3;
+      if (game.failedWaves >= game.maxFails) {
+        game.state = 'GAMEOVER';
+        return;
+      }
+      game.retryAvailable = true;
+      game.waveComplete = true;
+      game.waveCompleteTimer = 4;
+    } else if (allConvoyPassed || (allEnemiesDead && game.missiles.length === 0)) {
+      completeWave();
+    }
+  }
+
+  if (game.waveComplete) {
+    game.waveCompleteTimer -= dt;
+    if (game.waveCompleteTimer <= 0) {
+      game.state = 'SHOP';
+      game.shopTab = 'buy';
+      game.shopSelectedShip = -1;
+    }
+  }
+
+  // Notification timer
+  if (game.notificationTimer > 0) {
+    game.notificationTimer -= dt;
+    if (game.notificationTimer <= 0) game.notification = null;
+  }
+}
+
+function completeWave() {
+  game.waveComplete = true;
+  game.waveCompleteTimer = 3;
+  game.survivedConvoy = game.convoyShips.filter(c => c.hp > 0).length;
+
+  let bonus = 0;
+  for (const c of game.convoyShips) {
+    if (c.hp > 0) {
+      bonus += c.goldBonus;
+    }
+  }
+  game.gold += bonus;
+  game.score += bonus;
+  game.waveGoldEarned += bonus;
+
+  game.notification = 'Wave ' + game.wave + ' Complete! +' + bonus + ' gold bonus';
+  game.notificationTimer = 3;
+
+  // Refill interceptors
+  game.interceptorMissiles = Math.min(game.interceptorMissiles + 2, 10);
+}
+
+// ============== SHOP ==============
+function drawShop() {
+  // Background
+  ctx.fillStyle = '#0a0a1a';
+  ctx.fillRect(0, 0, W, H);
+
+  // Title
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 28px Segoe UI';
+  ctx.textAlign = 'center';
+  ctx.fillText('MISSION COMMAND', W / 2, 40);
+
+  ctx.font = '14px Segoe UI';
+  ctx.fillStyle = '#aaaaaa';
+  ctx.fillText('Wave ' + game.wave + ' Complete | Gold: ' + game.gold + ' | Score: ' + game.score, W / 2, 65);
+
+  // Tabs
+  const tabs = [
+    { id: 'buy', label: 'Buy Ships' },
+    { id: 'upgrade', label: 'Upgrade Ships' },
+    { id: 'slots', label: 'Buy Slots' },
+    { id: 'sell', label: 'Sell Ships' },
+    { id: 'missiles', label: 'Missile Defense' },
+  ];
+
+  const tabW = 160;
+  const tabH = 32;
+  const tabY = 85;
+  const tabStartX = W / 2 - (tabs.length * tabW) / 2;
+
+  for (let i = 0; i < tabs.length; i++) {
+    const tx = tabStartX + i * tabW;
+    const active = game.shopTab === tabs[i].id;
+    ctx.fillStyle = active ? '#1a4a7a' : '#0d1f3c';
+    ctx.fillRect(tx, tabY, tabW - 4, tabH);
+    ctx.strokeStyle = active ? '#44aaff' : '#1a3a5c';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(tx, tabY, tabW - 4, tabH);
+    ctx.fillStyle = active ? '#ffffff' : '#888888';
+    ctx.font = '12px Segoe UI';
+    ctx.textAlign = 'center';
+    ctx.fillText(tabs[i].label, tx + (tabW - 4) / 2, tabY + 21);
+  }
+
+  const contentY = 130;
+
+  if (game.shopTab === 'buy') {
+    drawShopBuy(contentY);
+  } else if (game.shopTab === 'upgrade') {
+    drawShopUpgrade(contentY);
+  } else if (game.shopTab === 'slots') {
+    drawShopSlots(contentY);
+  } else if (game.shopTab === 'sell') {
+    drawShopSell(contentY);
+  } else if (game.shopTab === 'missiles') {
+    drawShopMissiles(contentY);
+  }
+
+  // Continue button
+  const btnX = W / 2 - 100;
+  const btnY = H - 60;
+  const btnW = 200;
+  const btnH = 40;
+  ctx.fillStyle = '#1a6a2a';
+  ctx.fillRect(btnX, btnY, btnW, btnH);
+  ctx.strokeStyle = '#44ff66';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(btnX, btnY, btnW, btnH);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 16px Segoe UI';
+  ctx.textAlign = 'center';
+  ctx.fillText('NEXT WAVE >>', W / 2, btnY + 26);
+
+  // Retry button (if available)
+  if (game.retryAvailable) {
+    const rbX = W / 2 - 100;
+    const rbY = H - 110;
+    ctx.fillStyle = '#6a3a1a';
+    ctx.fillRect(rbX, rbY, 200, 40);
+    ctx.strokeStyle = '#ff8844';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(rbX, rbY, 200, 40);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 14px Segoe UI';
+    ctx.textAlign = 'center';
+    ctx.fillText('RETRY WAVE ' + game.wave, W / 2, rbY + 26);
+  }
+
+  // Fleet display
+  const fleetY = H - 170;
+  ctx.fillStyle = '#aaaaaa';
+  ctx.font = '11px Segoe UI';
+  ctx.textAlign = 'center';
+  ctx.fillText('Your Fleet: ' + game.escortShips.length + '/' + game.maxSlots + ' slots', W / 2, fleetY);
+
+  for (let i = 0; i < game.escortShips.length; i++) {
+    const s = game.escortShips[i];
+    const sx = W / 2 - (game.escortShips.length * 50) / 2 + i * 50 + 25;
+    const sy = fleetY + 20;
+    ctx.fillStyle = s.color;
+    ctx.beginPath();
+    ctx.arc(sx, sy, 8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '9px Segoe UI';
+    ctx.fillText(s.name.split(' ')[0], sx, sy + 18);
+  }
+}
+
+function drawShopBuy(startY) {
+  const types = Object.keys(SHIP_TYPES);
+  ctx.fillStyle = '#cccccc';
+  ctx.font = 'bold 16px Segoe UI';
+  ctx.textAlign = 'center';
+  ctx.fillText('Purchase Escort Ships', W / 2, startY + 10);
+  ctx.font = '12px Segoe UI';
+  ctx.fillStyle = '#888888';
+  ctx.fillText('Slots: ' + game.escortShips.length + '/' + game.maxSlots, W / 2, startY + 30);
+
+  for (let i = 0; i < types.length; i++) {
+    const type = types[i];
+    const def = SHIP_TYPES[type];
+    const cardX = 80 + i * 190;
+    const cardY = startY + 50;
+    const cardW = 170;
+    const cardH = 260;
+
+    const canBuy = game.gold >= def.cost && game.escortShips.length < game.maxSlots;
+
+    ctx.fillStyle = canBuy ? '#0d2a1a' : '#1a1a2a';
+    ctx.fillRect(cardX, cardY, cardW, cardH);
+    ctx.strokeStyle = canBuy ? '#44aa66' : '#333355';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(cardX, cardY, cardW, cardH);
+
+    // Ship icon
+    ctx.fillStyle = def.color;
+    ctx.beginPath();
+    ctx.arc(cardX + cardW / 2, cardY + 40, def.size, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 14px Segoe UI';
+    ctx.textAlign = 'center';
+    ctx.fillText(def.name, cardX + cardW / 2, cardY + 70);
+
+    ctx.font = '11px Segoe UI';
+    ctx.fillStyle = '#aaaaaa';
+    const stats = [
+      'HP: ' + def.hp,
+      'Damage: ' + def.damage,
+      'Fire Rate: ' + def.fireRate.toFixed(2) + 's',
+      'Range: ' + def.range,
+      'Speed: ' + def.speed,
+      'Tier: ' + def.tier,
+    ];
+    for (let j = 0; j < stats.length; j++) {
+      ctx.fillText(stats[j], cardX + cardW / 2, cardY + 95 + j * 18);
+    }
+
+    // Cost
+    ctx.fillStyle = canBuy ? '#ffd700' : '#886600';
+    ctx.font = 'bold 16px Segoe UI';
+    ctx.fillText(def.cost + 'g', cardX + cardW / 2, cardY + 220);
+
+    // Buy button
+    if (canBuy) {
+      ctx.fillStyle = '#1a5a2a';
+      ctx.fillRect(cardX + 20, cardY + 232, cardW - 40, 22);
+      ctx.strokeStyle = '#44ff66';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(cardX + 20, cardY + 232, cardW - 40, 22);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '11px Segoe UI';
+      ctx.fillText('BUY', cardX + cardW / 2, cardY + 247);
+    }
+  }
+}
+
+function drawShopUpgrade(startY) {
+  ctx.fillStyle = '#cccccc';
+  ctx.font = 'bold 16px Segoe UI';
+  ctx.textAlign = 'center';
+  ctx.fillText('Upgrade Your Ships', W / 2, startY + 10);
+
+  if (game.escortShips.length === 0) {
+    ctx.fillStyle = '#888888';
+    ctx.font = '14px Segoe UI';
+    ctx.fillText('No ships to upgrade. Buy some first!', W / 2, startY + 80);
+    return;
+  }
+
+  // Ship selector
+  for (let i = 0; i < game.escortShips.length; i++) {
+    const s = game.escortShips[i];
+    const bx = W / 2 - (game.escortShips.length * 80) / 2 + i * 80;
+    const by = startY + 30;
+    const selected = game.shopSelectedShip === i;
+    ctx.fillStyle = selected ? '#1a4a7a' : '#0d1f3c';
+    ctx.fillRect(bx, by, 72, 50);
+    ctx.strokeStyle = selected ? '#44aaff' : '#1a3a5c';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(bx, by, 72, 50);
+    ctx.fillStyle = s.color;
+    ctx.beginPath();
+    ctx.arc(bx + 36, by + 20, 8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '9px Segoe UI';
+    ctx.textAlign = 'center';
+    ctx.fillText(s.name.split(' ')[0], bx + 36, by + 44);
+  }
+
+  if (game.shopSelectedShip < 0 || game.shopSelectedShip >= game.escortShips.length) {
+    ctx.fillStyle = '#888888';
+    ctx.font = '14px Segoe UI';
+    ctx.textAlign = 'center';
+    ctx.fillText('Select a ship above to upgrade', W / 2, startY + 140);
+    return;
+  }
+
+  const ship = game.escortShips[game.shopSelectedShip];
+  const upgradeTypes = Object.keys(UPGRADE_DEFS);
+  const uy = startY + 100;
+
+  for (let i = 0; i < upgradeTypes.length; i++) {
+    const ut = upgradeTypes[i];
+    const def = UPGRADE_DEFS[ut];
+    const level = ship.upgrades[ut];
+    const maxed = level >= def.maxLevel;
+    const cost = maxed ? 0 : ship.getUpgradeCost(ut);
+    const canUpgrade = !maxed && game.gold >= cost;
+
+    const bx = 120 + i * 175;
+    const by = uy;
+    const bw = 160;
+    const bh = 180;
+
+    ctx.fillStyle = canUpgrade ? '#0d2a1a' : '#1a1a2a';
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.strokeStyle = canUpgrade ? '#44aa66' : '#333355';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(bx, by, bw, bh);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 13px Segoe UI';
+    ctx.textAlign = 'center';
+    ctx.fillText(def.name, bx + bw / 2, by + 25);
+
+    ctx.fillStyle = '#aaaaaa';
+    ctx.font = '11px Segoe UI';
+    ctx.fillText(def.desc, bx + bw / 2, by + 45);
+
+    // Level bar
+    ctx.fillStyle = '#333';
+    ctx.fillRect(bx + 20, by + 60, bw - 40, 12);
+    for (let j = 0; j < def.maxLevel; j++) {
+      const segX = bx + 20 + j * ((bw - 40) / def.maxLevel);
+      const segW = (bw - 40) / def.maxLevel - 2;
+      ctx.fillStyle = j < level ? '#44ff66' : '#1a1a2a';
+      ctx.fillRect(segX, by + 60, segW, 12);
+    }
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '10px Segoe UI';
+    ctx.fillText('Level ' + level + '/' + def.maxLevel, bx + bw / 2, by + 90);
+
+    // Current stat
+    let statText = '';
+    if (ut === 'hull') statText = 'HP: ' + ship.getMaxHp();
+    else if (ut === 'damage') statText = 'DMG: ' + ship.getDamage().toFixed(1);
+    else if (ut === 'fireRate') statText = 'Rate: ' + ship.getFireRate().toFixed(2) + 's';
+    else if (ut === 'range') statText = 'Range: ' + ship.getRange().toFixed(0);
+    ctx.fillStyle = '#88ddff';
+    ctx.fillText(statText, bx + bw / 2, by + 110);
+
+    if (!maxed) {
+      ctx.fillStyle = canUpgrade ? '#ffd700' : '#886600';
+      ctx.font = 'bold 14px Segoe UI';
+      ctx.fillText(cost + 'g', bx + bw / 2, by + 135);
+
+      if (canUpgrade) {
+        ctx.fillStyle = '#1a5a2a';
+        ctx.fillRect(bx + 20, by + 148, bw - 40, 22);
+        ctx.strokeStyle = '#44ff66';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(bx + 20, by + 148, bw - 40, 22);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '11px Segoe UI';
+        ctx.fillText('UPGRADE', bx + bw / 2, by + 163);
+      }
+    } else {
+      ctx.fillStyle = '#44ff66';
+      ctx.font = 'bold 14px Segoe UI';
+      ctx.fillText('MAXED', bx + bw / 2, by + 140);
+    }
+  }
+}
+
+function drawShopSlots(startY) {
+  ctx.fillStyle = '#cccccc';
+  ctx.font = 'bold 16px Segoe UI';
+  ctx.textAlign = 'center';
+  ctx.fillText('Buy More Ship Slots', W / 2, startY + 10);
+  ctx.font = '12px Segoe UI';
+  ctx.fillStyle = '#888888';
+  ctx.fillText('Current Slots: ' + game.maxSlots, W / 2, startY + 30);
+
+  for (let i = 0; i < SLOT_UPGRADES.length; i++) {
+    const su = SLOT_UPGRADES[i];
+    const bx = W / 2 - 200;
+    const by = startY + 60 + i * 55;
+    const bw = 400;
+    const bh = 45;
+
+    const owned = game.maxSlots >= su.slot;
+    const available = !owned && game.wave >= su.waveReq && game.gold >= su.cost;
+    const locked = !owned && game.wave < su.waveReq;
+
+    ctx.fillStyle = owned ? '#1a3a1a' : available ? '#0d2a1a' : '#1a1a2a';
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.strokeStyle = owned ? '#44ff66' : available ? '#44aa66' : '#333355';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(bx, by, bw, bh);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 13px Segoe UI';
+    ctx.textAlign = 'left';
+    ctx.fillText('Slot ' + su.slot, bx + 15, by + 20);
+
+    if (owned) {
+      ctx.fillStyle = '#44ff66';
+      ctx.font = '12px Segoe UI';
+      ctx.fillText('OWNED', bx + 15, by + 36);
+    } else if (locked) {
+      ctx.fillStyle = '#888888';
+      ctx.font = '12px Segoe UI';
+      ctx.fillText('Requires Wave ' + su.waveReq, bx + 15, by + 36);
+    } else {
+      ctx.fillStyle = '#ffd700';
+      ctx.font = '12px Segoe UI';
+      ctx.fillText(su.cost + 'g', bx + 15, by + 36);
+    }
+
+    if (available) {
+      ctx.fillStyle = '#1a5a2a';
+      ctx.fillRect(bx + bw - 90, by + 8, 75, 28);
+      ctx.strokeStyle = '#44ff66';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(bx + bw - 90, by + 8, 75, 28);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '11px Segoe UI';
+      ctx.textAlign = 'center';
+      ctx.fillText('BUY', bx + bw - 52, by + 27);
+    }
+  }
+}
+
+function drawShopSell(startY) {
+  ctx.fillStyle = '#cccccc';
+  ctx.font = 'bold 16px Segoe UI';
+  ctx.textAlign = 'center';
+  ctx.fillText('Sell Ships', W / 2, startY + 10);
+
+  if (game.escortShips.length === 0) {
+    ctx.fillStyle = '#888888';
+    ctx.font = '14px Segoe UI';
+    ctx.fillText('No ships to sell.', W / 2, startY + 80);
+    return;
+  }
+
+  for (let i = 0; i < game.escortShips.length; i++) {
+    const s = game.escortShips[i];
+    const bx = W / 2 - 200;
+    const by = startY + 40 + i * 60;
+    const bw = 400;
+    const bh = 50;
+
+    ctx.fillStyle = '#1a1a2a';
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.strokeStyle = '#aa4444';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(bx, by, bw, bh);
+
+    ctx.fillStyle = s.color;
+    ctx.beginPath();
+    ctx.arc(bx + 25, by + 25, 10, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 13px Segoe UI';
+    ctx.textAlign = 'left';
+    ctx.fillText(s.name, bx + 45, by + 20);
+
+    ctx.fillStyle = '#aaaaaa';
+    ctx.font = '11px Segoe UI';
+    const upgradeStr = 'H:' + s.upgrades.hull + ' D:' + s.upgrades.damage + ' F:' + s.upgrades.fireRate + ' R:' + s.upgrades.range;
+    ctx.fillText(upgradeStr, bx + 45, by + 38);
+
+    const sellPrice = s.getSellPrice();
+    ctx.fillStyle = '#ffd700';
+    ctx.font = 'bold 13px Segoe UI';
+    ctx.textAlign = 'right';
+    ctx.fillText('+' + sellPrice + 'g', bx + bw - 100, by + 30);
+
+    ctx.fillStyle = '#5a1a1a';
+    ctx.fillRect(bx + bw - 80, by + 10, 70, 28);
+    ctx.strokeStyle = '#ff4444';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(bx + bw - 80, by + 10, 70, 28);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '11px Segoe UI';
+    ctx.textAlign = 'center';
+    ctx.fillText('SELL', bx + bw - 45, by + 29);
+  }
+}
+
+function drawShopMissiles(startY) {
+  ctx.fillStyle = '#cccccc';
+  ctx.font = 'bold 16px Segoe UI';
+  ctx.textAlign = 'center';
+  ctx.fillText('Missile Defense', W / 2, startY + 10);
+
+  ctx.fillStyle = '#aaaaaa';
+  ctx.font = '12px Segoe UI';
+  ctx.fillText('Interceptor Missiles: ' + game.interceptorMissiles + '/10', W / 2, startY + 35);
+  ctx.fillText('Click on incoming missiles during combat to intercept them!', W / 2, startY + 55);
+
+  const costs = [
+    { amount: 1, cost: 50 },
+    { amount: 3, cost: 120 },
+    { amount: 5, cost: 180 },
+  ];
+
+  for (let i = 0; i < costs.length; i++) {
+    const c = costs[i];
+    const bx = W / 2 - 150;
+    const by = startY + 80 + i * 55;
+    const bw = 300;
+    const bh = 45;
+
+    const canBuy = game.gold >= c.cost && game.interceptorMissiles + c.amount <= 10;
+
+    ctx.fillStyle = canBuy ? '#0d2a1a' : '#1a1a2a';
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.strokeStyle = canBuy ? '#44aa66' : '#333355';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(bx, by, bw, bh);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 13px Segoe UI';
+    ctx.textAlign = 'left';
+    ctx.fillText('+' + c.amount + ' Interceptor' + (c.amount > 1 ? 's' : ''), bx + 15, by + 20);
+
+    ctx.fillStyle = canBuy ? '#ffd700' : '#886600';
+    ctx.font = '12px Segoe UI';
+    ctx.fillText(c.cost + 'g', bx + 15, by + 38);
+
+    if (canBuy) {
+      ctx.fillStyle = '#1a5a2a';
+      ctx.fillRect(bx + bw - 80, by + 8, 70, 28);
+      ctx.strokeStyle = '#44ff66';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(bx + bw - 80, by + 8, 70, 28);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '11px Segoe UI';
+      ctx.textAlign = 'center';
+      ctx.fillText('BUY', bx + bw - 45, by + 27);
+    }
+  }
+
+  // Missile info
+  ctx.fillStyle = '#888888';
+  ctx.font = '11px Segoe UI';
+  ctx.textAlign = 'center';
+  ctx.fillText('Missiles appear starting from Wave 3', W / 2, startY + 260);
+  ctx.fillText('They target convoy ships and deal 150 damage', W / 2, startY + 278);
+  ctx.fillText('Click near a missile to intercept it (costs 1 interceptor)', W / 2, startY + 296);
+}
+
+// ============== SHOP CLICK ==============
+function handleShopClick(mx, my) {
+  // Tab clicks
+  const tabs = ['buy', 'upgrade', 'slots', 'sell', 'missiles'];
+  const tabW = 160;
+  const tabH = 32;
+  const tabY = 85;
+  const tabStartX = W / 2 - (tabs.length * tabW) / 2;
+  for (let i = 0; i < tabs.length; i++) {
+    const tx = tabStartX + i * tabW;
+    if (mx >= tx && mx <= tx + tabW - 4 && my >= tabY && my <= tabY + tabH) {
+      game.shopTab = tabs[i];
+      game.shopSelectedShip = -1;
+      return;
+    }
+  }
+
+  // Continue button
+  const btnX = W / 2 - 100;
+  const btnY = H - 60;
+  if (mx >= btnX && mx <= btnX + 200 && my >= btnY && my <= btnY + 40) {
+    game.retryAvailable = false;
+    setupWave(game.wave + 1);
+    game.state = 'PLAYING';
+    return;
+  }
+
+  // Retry button
+  if (game.retryAvailable) {
+    const rbX = W / 2 - 100;
+    const rbY = H - 110;
+    if (mx >= rbX && mx <= rbX + 200 && my >= rbY && my <= rbY + 40) {
+      game.retryAvailable = false;
+      setupWave(game.wave);
+      game.state = 'PLAYING';
+      return;
+    }
+  }
+
+  const contentY = 130;
+
+  if (game.shopTab === 'buy') {
+    const types = Object.keys(SHIP_TYPES);
+    for (let i = 0; i < types.length; i++) {
+      const type = types[i];
+      const def = SHIP_TYPES[type];
+      const cardX = 80 + i * 190;
+      const cardY = contentY + 50;
+
+      if (game.gold >= def.cost && game.escortShips.length < game.maxSlots) {
+        if (mx >= cardX + 20 && mx <= cardX + 150 && my >= cardY + 232 && my <= cardY + 254) {
+          game.gold -= def.cost;
+          game.escortShips.push(new EscortShip(type));
+          return;
+        }
+      }
+    }
+  }
+
+  if (game.shopTab === 'upgrade') {
+    // Ship selector
+    for (let i = 0; i < game.escortShips.length; i++) {
+      const bx = W / 2 - (game.escortShips.length * 80) / 2 + i * 80;
+      const by = contentY + 30;
+      if (mx >= bx && mx <= bx + 72 && my >= by && my <= by + 50) {
+        game.shopSelectedShip = i;
+        return;
+      }
+    }
+
+    if (game.shopSelectedShip >= 0 && game.shopSelectedShip < game.escortShips.length) {
+      const ship = game.escortShips[game.shopSelectedShip];
+      const upgradeTypes = Object.keys(UPGRADE_DEFS);
+      const uy = contentY + 100;
+
+      for (let i = 0; i < upgradeTypes.length; i++) {
+        const ut = upgradeTypes[i];
+        const def = UPGRADE_DEFS[ut];
+        const level = ship.upgrades[ut];
+        if (level >= def.maxLevel) continue;
+        const cost = ship.getUpgradeCost(ut);
+        if (game.gold < cost) continue;
+
+        const bx = 120 + i * 175;
+        const by = uy;
+        if (mx >= bx + 20 && mx <= bx + 140 && my >= by + 148 && my <= by + 170) {
+          game.gold -= ship.applyUpgrade(ut);
+          return;
+        }
+      }
+    }
+  }
+
+  if (game.shopTab === 'slots') {
+    for (let i = 0; i < SLOT_UPGRADES.length; i++) {
+      const su = SLOT_UPGRADES[i];
+      const bx = W / 2 - 200;
+      const by = contentY + 60 + i * 55;
+
+      const owned = game.maxSlots >= su.slot;
+      const available = !owned && game.wave >= su.waveReq && game.gold >= su.cost;
+
+      if (available) {
+        if (mx >= bx + 310 && mx <= bx + 400 && my >= by + 8 && my <= by + 36) {
+          game.gold -= su.cost;
+          game.maxSlots = su.slot;
+          return;
+        }
+      }
+    }
+  }
+
+  if (game.shopTab === 'sell') {
+    for (let i = 0; i < game.escortShips.length; i++) {
+      const s = game.escortShips[i];
+      const bx = W / 2 - 200;
+      const by = contentY + 40 + i * 60;
+
+      if (mx >= bx + 320 && mx <= bx + 400 && my >= by + 10 && my <= by + 38) {
+        game.gold += s.getSellPrice();
+        game.escortShips.splice(i, 1);
+        return;
+      }
+    }
+  }
+
+  if (game.shopTab === 'missiles') {
+    const costs = [
+      { amount: 1, cost: 50 },
+      { amount: 3, cost: 120 },
+      { amount: 5, cost: 180 },
+    ];
+    for (let i = 0; i < costs.length; i++) {
+      const c = costs[i];
+      const bx = W / 2 - 150;
+      const by = contentY + 80 + i * 55;
+
+      const canBuy = game.gold >= c.cost && game.interceptorMissiles + c.amount <= 10;
+      if (canBuy) {
+        if (mx >= bx + 220 && mx <= bx + 300 && my >= by + 8 && my <= by + 36) {
+          game.gold -= c.cost;
+          game.interceptorMissiles += c.amount;
+          return;
+        }
+      }
+    }
+  }
+}
+
+// ============== GAME CLICK ==============
+function handleGameClick(mx, my) {
+  // Intercept missiles
+  for (let i = game.missiles.length - 1; i >= 0; i--) {
+    const m = game.missiles[i];
+    if (m.launched && dist({ x: mx, y: my }, m) < 60) {
+      if (game.interceptorMissiles > 0) {
+        game.interceptorMissiles--;
+        m.alive = false;
+        spawnExplosion(m.x, m.y, 20);
+        addFloatingText(m.x, m.y - 15, 'INTERCEPTED!', '#44ff66');
+        game.score += 50;
+        return;
+      } else {
+        if (game.noInterceptorTimer <= 0) {
+          addFloatingText(mx, my - 15, 'No interceptors!', '#ff8844');
+          game.noInterceptorTimer = 1;
+        }
+      }
+    }
+  }
+}
+
+// ============== MENU ==============
+function drawMenu() {
+  drawOcean();
+
+  // Title
+  ctx.fillStyle = 'rgba(0,0,0,0.7)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 48px Segoe UI';
+  ctx.textAlign = 'center';
+  ctx.fillText('HORMUZ WAR', W / 2, 200);
+
+  ctx.fillStyle = '#88bbdd';
+  ctx.font = '20px Segoe UI';
+  ctx.fillText('Naval Escort Commander', W / 2, 240);
+
+  ctx.fillStyle = '#aaaaaa';
+  ctx.font = '14px Segoe UI';
+  ctx.fillText('Protect the convoy through the Strait of Hormuz', W / 2, 280);
+  ctx.fillText('Your escort ships fight automatically in formation', W / 2, 305);
+  ctx.fillText('Click to intercept incoming missiles', W / 2, 330);
+  ctx.fillText('Buy, upgrade, and manage your fleet between waves', W / 2, 355);
+
+  // Start button
+  const btnX = W / 2 - 100;
+  const btnY = 420;
+  ctx.fillStyle = '#1a4a2a';
+  ctx.fillRect(btnX, btnY, 200, 50);
+  ctx.strokeStyle = '#44ff66';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(btnX, btnY, 200, 50);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 20px Segoe UI';
+  ctx.fillText('START GAME', W / 2, btnY + 33);
+
+  ctx.fillStyle = '#666666';
+  ctx.font = '12px Segoe UI';
+  ctx.fillText('v1.0 - Escort Mission', W / 2, H - 20);
+}
+
+// ============== GAME OVER ==============
+function drawGameOver() {
+  drawOcean();
+  ctx.fillStyle = 'rgba(0,0,0,0.8)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.fillStyle = '#ff4444';
+  ctx.font = 'bold 48px Segoe UI';
+  ctx.textAlign = 'center';
+  ctx.fillText('MISSION FAILED', W / 2, 200);
+
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '20px Segoe UI';
+  ctx.fillText('Final Score: ' + game.score, W / 2, 260);
+  ctx.fillText('Waves Survived: ' + (game.wave - 1), W / 2, 290);
+  ctx.fillText('Gold Earned: ' + game.gold, W / 2, 320);
+
+  // Restart button
+  const btnX = W / 2 - 100;
+  const btnY = 380;
+  ctx.fillStyle = '#1a4a2a';
+  ctx.fillRect(btnX, btnY, 200, 50);
+  ctx.strokeStyle = '#44ff66';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(btnX, btnY, 200, 50);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 20px Segoe UI';
+  ctx.fillText('PLAY AGAIN', W / 2, btnY + 33);
+}
+
+// ============== INPUT ==============
+canvas.addEventListener('mousemove', e => {
+  const rect = canvas.getBoundingClientRect();
+  game.mouseX = (e.clientX - rect.left) * (W / rect.width);
+  game.mouseY = (e.clientY - rect.top) * (H / rect.height);
+});
+
+canvas.addEventListener('click', e => {
+  const rect = canvas.getBoundingClientRect();
+  const mx = (e.clientX - rect.left) * (W / rect.width);
+  const my = (e.clientY - rect.top) * (H / rect.height);
+
+  if (game.state === 'MENU') {
+    const btnX = W / 2 - 100;
+    const btnY = 420;
+    if (mx >= btnX && mx <= btnX + 200 && my >= btnY && my <= btnY + 50) {
+      startNewGame();
+    }
+  } else if (game.state === 'PLAYING') {
+    handleGameClick(mx, my);
+  } else if (game.state === 'SHOP') {
+    handleShopClick(mx, my);
+  } else if (game.state === 'GAMEOVER') {
+    const btnX = W / 2 - 100;
+    const btnY = 380;
+    if (mx >= btnX && mx <= btnX + 200 && my >= btnY && my <= btnY + 50) {
+      game.state = 'MENU';
+    }
+  }
+});
+
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+// ============== START ==============
+function startNewGame() {
+  game.state = 'PLAYING';
+  game.gold = 300;
+  game.score = 0;
+  game.wave = 0;
+  game.failedWaves = 0;
+  game.maxSlots = 3;
+  game.interceptorMissiles = 5;
+  game.escortShips = [];
+  game.escortShips.push(new EscortShip('patrol'));
+  game.retryAvailable = false;
+  game.noInterceptorTimer = 0;
+  setupWave(1);
+}
+
+// ============== MAIN LOOP ==============
+let lastTime = 0;
+function gameLoop(timestamp) {
+  const dt = Math.min((timestamp - lastTime) / 1000, 0.05);
+  lastTime = timestamp;
+
+  if (game.state === 'MENU') {
+    drawMenu();
+  } else if (game.state === 'PLAYING') {
+    updateGame(dt);
+    drawOcean();
+    // Draw convoy
+    for (const c of game.convoyShips) {
+      if (c.hp > 0) c.draw();
+    }
+    // Draw escorts
+    for (const s of game.escortShips) s.draw();
+    // Draw enemies
+    for (const e of game.enemies) e.draw();
+    // Draw projectiles
+    for (const p of game.projectiles) p.draw();
+    // Draw missiles
+    for (const m of game.missiles) m.draw();
+    // Draw explosions
+    for (const e of game.explosions) e.draw();
+    // Floating texts
+    for (const ft of game.floatingTexts) {
+      ctx.globalAlpha = Math.min(1, ft.life);
+      ctx.fillStyle = ft.color;
+      ctx.font = 'bold 13px Segoe UI';
+      ctx.textAlign = 'center';
+      ctx.fillText(ft.text, ft.x, ft.y);
+    }
+    ctx.globalAlpha = 1;
+    drawHUD();
+    drawMinimap();
+
+    // Notification
+    if (game.notification && game.notificationTimer > 0) {
+      const alpha = Math.min(1, game.notificationTimer);
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = 'rgba(0,0,0,0.7)';
+      ctx.fillRect(W / 2 - 250, H / 2 - 30, 500, 60);
+      ctx.strokeStyle = '#44aaff';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(W / 2 - 250, H / 2 - 30, 500, 60);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 18px Segoe UI';
+      ctx.textAlign = 'center';
+      ctx.fillText(game.notification, W / 2, H / 2 + 7);
+      ctx.globalAlpha = 1;
+    }
+
+    // Wave complete overlay
+    if (game.waveComplete && game.waveCompleteTimer > 0) {
+      const alpha = Math.min(1, game.waveCompleteTimer * 0.5);
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = 'rgba(0,0,0,0.5)';
+      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = game.waveFailed ? '#ff4444' : '#44ff66';
+      ctx.font = 'bold 36px Segoe UI';
+      ctx.textAlign = 'center';
+      ctx.fillText(game.waveFailed ? 'WAVE FAILED' : 'WAVE COMPLETE!', W / 2, H / 2 - 20);
+      ctx.fillStyle = '#ffd700';
+      ctx.font = '18px Segoe UI';
+      ctx.fillText('Gold Earned: ' + game.waveGoldEarned, W / 2, H / 2 + 20);
+      if (!game.waveFailed) {
+        ctx.fillStyle = '#88ddff';
+        ctx.fillText('Convoy Survived: ' + game.survivedConvoy + '/' + game.totalConvoy, W / 2, H / 2 + 50);
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    // Cursor for missile interception
+    if (game.missileNearCursor) {
+      canvas.style.cursor = 'crosshair';
+    } else {
+      canvas.style.cursor = 'default';
+    }
+  } else if (game.state === 'SHOP') {
+    drawShop();
+  } else if (game.state === 'GAMEOVER') {
+    drawGameOver();
+  }
+
+  // No interceptor timer
+  if (game.noInterceptorTimer > 0) game.noInterceptorTimer -= dt;
+
+  requestAnimationFrame(gameLoop);
+}
+
+requestAnimationFrame(gameLoop);
+</script>
+</body>
+</html>
