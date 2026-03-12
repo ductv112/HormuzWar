@@ -264,6 +264,7 @@ const game = {
   blackMarketOffers: [],
   replayGoldMulti: 1.0,
   isReplay: false,
+  replayReturnWave: 0,
 };
 
 // ============== CLASSES ==============
@@ -1380,14 +1381,20 @@ function updateGame(dt) {
   if (!game.waveComplete && !game.waveFailed) {
     if (allConvoyDead) {
       game.waveFailed = true;
-      game.failedWaves++;
-      game.notification = 'CONVOY DESTROYED! Lives remaining: ' + (game.maxFails - game.failedWaves);
-      game.notificationTimer = 3;
-      if (game.failedWaves >= game.maxFails) {
-        game.state = 'GAMEOVER';
-        return;
+      if (game.isReplay) {
+        // Replay failure doesn't cost a life
+        game.notification = 'REPLAY FAILED - No penalty';
+        game.notificationTimer = 3;
+      } else {
+        game.failedWaves++;
+        game.notification = 'CONVOY DESTROYED! Lives remaining: ' + (game.maxFails - game.failedWaves);
+        game.notificationTimer = 3;
+        if (game.failedWaves >= game.maxFails) {
+          game.state = 'GAMEOVER';
+          return;
+        }
+        game.retryAvailable = true;
       }
-      game.retryAvailable = true;
       game.waveComplete = true;
       game.waveCompleteTimer = 4;
     } else if (allConvoyPassed || (allEnemiesDead && game.missiles.length === 0)) {
@@ -1398,6 +1405,13 @@ function updateGame(dt) {
   if (game.waveComplete) {
     game.waveCompleteTimer -= dt;
     if (game.waveCompleteTimer <= 0) {
+      // Restore wave progress after replay
+      if (game.isReplay && game.replayReturnWave > 0) {
+        game.wave = game.replayReturnWave;
+        game.replayReturnWave = 0;
+      }
+      game.isReplay = false;
+      game.replayGoldMulti = 1.0;
       game.state = 'SHOP';
       game.shopTab = 'buy';
       game.shopSelectedShip = -1;
@@ -1536,13 +1550,12 @@ function drawShop() {
   ctx.textAlign = 'center';
   ctx.fillText('NEXT WAVE >>', nextBtnX + nextBtnW / 2, nextBtnY + 26);
 
-  // REPLAY WAVE button (left side) - farm gold
+  // REPLAY WAVE button (left side) - farm gold on easier wave
   const replayBtnX = W / 2 - 200;
   const replayBtnY = H - 60;
   const replayBtnW = 190;
   const replayBtnH = 40;
-  const replayWave = Math.max(1, game.wave);
-  const replayGoldPenalty = Math.max(1, game.wave - 1); // earlier waves give less
+  const replayWave = Math.max(1, game.wave - 1);
   ctx.fillStyle = '#1a3a6a';
   ctx.fillRect(replayBtnX, replayBtnY, replayBtnW, replayBtnH);
   ctx.strokeStyle = '#4488ff';
@@ -1551,10 +1564,10 @@ function drawShop() {
   ctx.fillStyle = '#ffffff';
   ctx.font = 'bold 14px Segoe UI';
   ctx.textAlign = 'center';
-  ctx.fillText('REPLAY WAVE ' + replayWave, replayBtnX + replayBtnW / 2, replayBtnY + 18);
+  ctx.fillText('FARM WAVE ' + replayWave, replayBtnX + replayBtnW / 2, replayBtnY + 18);
   ctx.fillStyle = '#88bbff';
   ctx.font = '10px Segoe UI';
-  ctx.fillText('Farm gold (reduced rewards)', replayBtnX + replayBtnW / 2, replayBtnY + 33);
+  ctx.fillText('Easier wave, reduced rewards', replayBtnX + replayBtnW / 2, replayBtnY + 33);
 
   // Retry button (if wave failed)
   if (game.retryAvailable) {
@@ -2094,15 +2107,17 @@ function handleShopClick(mx, my) {
     return;
   }
 
-  // REPLAY WAVE button (left side)
+  // FARM WAVE button (left side) - replay previous wave
   const replayBtnX = W / 2 - 200;
   const replayBtnY = H - 60;
   if (mx >= replayBtnX && mx <= replayBtnX + 190 && my >= replayBtnY && my <= replayBtnY + 40) {
-    const replayWave = Math.max(1, game.wave);
+    const replayWave = Math.max(1, game.wave - 1);
+    const savedWave = game.wave; // remember current progress
     game.retryAvailable = false;
     game.isReplay = true;
-    game.replayGoldMulti = 0.5; // 50% gold reward for replays
+    game.replayGoldMulti = 0.5;
     setupWave(replayWave);
+    game.replayReturnWave = savedWave; // return to this wave after replay
     game.state = 'PLAYING';
     return;
   }
