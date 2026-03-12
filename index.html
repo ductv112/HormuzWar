@@ -265,6 +265,9 @@ const game = {
   replayGoldMulti: 1.0,
   isReplay: false,
   replayReturnWave: 0,
+  highestCompletedWave: 0,
+  selectedFarmWave: 0,
+  replayWasFailed: false,
 };
 
 // ============== CLASSES ==============
@@ -1177,6 +1180,14 @@ function drawWake(wake, shipSize, isEnemy) {
   ctx.globalAlpha = 1;
 }
 
+function ensurePlayerHasShip() {
+  if (game.escortShips.length === 0) {
+    game.escortShips.push(new EscortShip('patrol'));
+    game.notification = 'Emergency Patrol Boat deployed!';
+    game.notificationTimer = 2;
+  }
+}
+
 function checkAchievements() {
   for (const a of ACHIEVEMENTS) {
     if (!game.unlockedAchievements.has(a.id) && a.check()) {
@@ -1815,10 +1826,12 @@ function updateGame(dt) {
       // Restore wave progress after replay
       if (game.isReplay && game.replayReturnWave > 0) {
         game.wave = game.replayReturnWave;
+        game.waveFailed = game.replayWasFailed || false;
         game.replayReturnWave = 0;
       }
       game.isReplay = false;
       game.replayGoldMulti = 1.0;
+      game.selectedFarmWave = 0;
       game.state = 'SHOP';
       game.shopTab = 'buy';
       game.shopSelectedShip = -1;
@@ -1852,6 +1865,11 @@ function completeWave() {
   const replayTag = game.isReplay ? ' (Replay -50%)' : '';
   game.notification = 'Wave ' + game.wave + ' Complete! +' + bonus + ' gold bonus' + replayTag;
   game.notificationTimer = 3;
+
+  // Track progress (only for non-replay waves)
+  if (!game.isReplay && game.wave > game.highestCompletedWave) {
+    game.highestCompletedWave = game.wave;
+  }
 
   // Refill interceptors
   game.interceptorMissiles = Math.min(game.interceptorMissiles + 2, 10);
@@ -1941,67 +1959,22 @@ function drawShop() {
     drawShopMarket(contentY);
   }
 
-  // Bottom buttons
-  // NEXT WAVE button (right side)
-  const nextBtnX = W / 2 + 10;
-  const nextBtnY = H - 60;
-  const nextBtnW = 190;
-  const nextBtnH = 40;
-  ctx.fillStyle = '#1a6a2a';
-  ctx.fillRect(nextBtnX, nextBtnY, nextBtnW, nextBtnH);
-  ctx.strokeStyle = '#44ff66';
-  ctx.lineWidth = 2;
-  ctx.strokeRect(nextBtnX, nextBtnY, nextBtnW, nextBtnH);
-  ctx.fillStyle = '#ffffff';
-  ctx.font = 'bold 16px Segoe UI';
-  ctx.textAlign = 'center';
-  ctx.fillText('NEXT WAVE >>', nextBtnX + nextBtnW / 2, nextBtnY + 26);
-
-  // REPLAY WAVE button (left side) - farm gold on easier wave
-  const replayBtnX = W / 2 - 200;
-  const replayBtnY = H - 60;
-  const replayBtnW = 190;
-  const replayBtnH = 40;
-  const replayWave = Math.max(1, game.wave - 1);
-  ctx.fillStyle = '#1a3a6a';
-  ctx.fillRect(replayBtnX, replayBtnY, replayBtnW, replayBtnH);
-  ctx.strokeStyle = '#4488ff';
-  ctx.lineWidth = 2;
-  ctx.strokeRect(replayBtnX, replayBtnY, replayBtnW, replayBtnH);
-  ctx.fillStyle = '#ffffff';
-  ctx.font = 'bold 14px Segoe UI';
-  ctx.textAlign = 'center';
-  ctx.fillText('FARM WAVE ' + replayWave, replayBtnX + replayBtnW / 2, replayBtnY + 18);
-  ctx.fillStyle = '#88bbff';
-  ctx.font = '10px Segoe UI';
-  ctx.fillText('Easier wave, reduced rewards', replayBtnX + replayBtnW / 2, replayBtnY + 33);
-
-  // Retry button (if wave failed)
-  if (game.retryAvailable) {
-    const rbX = W / 2 - 100;
-    const rbY = H - 110;
-    ctx.fillStyle = '#6a3a1a';
-    ctx.fillRect(rbX, rbY, 200, 40);
-    ctx.strokeStyle = '#ff8844';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(rbX, rbY, 200, 40);
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 14px Segoe UI';
-    ctx.textAlign = 'center';
-    ctx.fillText('RETRY WAVE ' + game.wave, W / 2, rbY + 26);
-  }
+  // ===== Bottom section =====
+  const bottomY = H - 195;
 
   // Fleet display
-  const fleetY = H - 175;
   ctx.fillStyle = '#aaaaaa';
   ctx.font = '11px Segoe UI';
   ctx.textAlign = 'center';
-  ctx.fillText('Your Fleet: ' + game.escortShips.length + '/' + game.maxSlots + ' slots', W / 2, fleetY);
+  const fleetText = game.escortShips.length === 0
+    ? 'Your Fleet: EMPTY (free Patrol Boat on farm/battle)'
+    : 'Your Fleet: ' + game.escortShips.length + '/' + game.maxSlots + ' slots';
+  ctx.fillText(fleetText, W / 2, bottomY);
 
   for (let i = 0; i < game.escortShips.length; i++) {
     const s = game.escortShips[i];
     const sx = W / 2 - (game.escortShips.length * 50) / 2 + i * 50 + 25;
-    const sy = fleetY + 20;
+    const sy = bottomY + 18;
     ctx.fillStyle = s.color;
     ctx.beginPath();
     ctx.arc(sx, sy, 8, 0, Math.PI * 2);
@@ -2009,6 +1982,88 @@ function drawShop() {
     ctx.fillStyle = '#ffffff';
     ctx.font = '9px Segoe UI';
     ctx.fillText(s.name.split(' ')[0], sx, sy + 18);
+  }
+
+  // Determine next wave: if failed current wave, next is same wave (retry)
+  const nextWave = game.waveFailed ? game.wave : game.wave + 1;
+
+  // NEXT WAVE / RETRY button (right)
+  const nextBtnX = W / 2 + 10;
+  const nextBtnY = H - 55;
+  const nextBtnW = 200;
+  const nextBtnH = 42;
+  ctx.fillStyle = game.waveFailed ? '#6a3a1a' : '#1a6a2a';
+  ctx.fillRect(nextBtnX, nextBtnY, nextBtnW, nextBtnH);
+  ctx.strokeStyle = game.waveFailed ? '#ff8844' : '#44ff66';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(nextBtnX, nextBtnY, nextBtnW, nextBtnH);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 15px Segoe UI';
+  ctx.textAlign = 'center';
+  if (game.waveFailed) {
+    ctx.fillText('RETRY WAVE ' + nextWave, nextBtnX + nextBtnW / 2, nextBtnY + 18);
+    ctx.fillStyle = '#ffaa88';
+    ctx.font = '10px Segoe UI';
+    ctx.fillText('Full rewards', nextBtnX + nextBtnW / 2, nextBtnY + 33);
+  } else {
+    ctx.fillText('WAVE ' + nextWave + ' >>', nextBtnX + nextBtnW / 2, nextBtnY + 27);
+  }
+
+  // FARM GOLD section (left) - wave selector
+  const farmX = 10;
+  const farmY = H - 55;
+  const farmH = 42;
+
+  ctx.fillStyle = '#aabbcc';
+  ctx.font = 'bold 11px Segoe UI';
+  ctx.textAlign = 'left';
+  ctx.fillText('FARM GOLD (50% rewards):', farmX, farmY - 5);
+
+  if (game.highestCompletedWave === 0) {
+    ctx.fillStyle = '#666';
+    ctx.font = '10px Segoe UI';
+    ctx.fillText('Complete wave 1 first to unlock farming', farmX, farmY + 18);
+  } else {
+    // Draw wave buttons for farming
+    const maxShow = Math.min(game.highestCompletedWave, 8);
+    const wBtnW = Math.min(48, Math.floor((W / 2 - 30) / maxShow));
+    for (let i = 0; i < maxShow; i++) {
+      const waveNum = game.highestCompletedWave - maxShow + 1 + i;
+      if (waveNum < 1) continue;
+      const bx = farmX + i * (wBtnW + 4);
+      const by = farmY;
+      const selected = game.selectedFarmWave === waveNum;
+
+      ctx.fillStyle = selected ? '#1a4a7a' : '#0d2a4a';
+      ctx.fillRect(bx, by, wBtnW, farmH);
+      ctx.strokeStyle = selected ? '#44aaff' : '#1a4a6a';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(bx, by, wBtnW, farmH);
+      ctx.fillStyle = selected ? '#ffffff' : '#88aacc';
+      ctx.font = 'bold 13px Segoe UI';
+      ctx.textAlign = 'center';
+      ctx.fillText('W' + waveNum, bx + wBtnW / 2, by + 17);
+      // Difficulty hint
+      ctx.fillStyle = '#668899';
+      ctx.font = '8px Segoe UI';
+      const diff = waveNum <= 3 ? 'Easy' : waveNum <= 7 ? 'Med' : waveNum <= 12 ? 'Hard' : 'Hell';
+      ctx.fillText(diff, bx + wBtnW / 2, by + 30);
+    }
+
+    // GO FARM button (after wave buttons)
+    if (game.selectedFarmWave > 0) {
+      const goX = farmX + maxShow * (wBtnW + 4) + 4;
+      const goW = 60;
+      ctx.fillStyle = '#1a5a3a';
+      ctx.fillRect(goX, farmY, goW, farmH);
+      ctx.strokeStyle = '#44dd88';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(goX, farmY, goW, farmH);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 12px Segoe UI';
+      ctx.textAlign = 'center';
+      ctx.fillText('GO!', goX + goW / 2, farmY + 27);
+    }
   }
 }
 
@@ -2502,44 +2557,57 @@ function handleShopClick(mx, my) {
     }
   }
 
-  // NEXT WAVE button (right side)
+  // NEXT WAVE / RETRY button (right side)
   const nextBtnX = W / 2 + 10;
-  const nextBtnY = H - 60;
-  if (mx >= nextBtnX && mx <= nextBtnX + 190 && my >= nextBtnY && my <= nextBtnY + 40) {
+  const nextBtnY = H - 55;
+  const nextBtnW = 200;
+  const nextBtnH = 42;
+  if (mx >= nextBtnX && mx <= nextBtnX + nextBtnW && my >= nextBtnY && my <= nextBtnY + nextBtnH) {
+    const nextWave = game.waveFailed ? game.wave : game.wave + 1;
     game.retryAvailable = false;
     game.replayGoldMulti = 1.0;
     game.isReplay = false;
-    setupWave(game.wave + 1);
+    game.selectedFarmWave = 0;
+    ensurePlayerHasShip();
+    setupWave(nextWave);
     game.state = 'PLAYING';
     return;
   }
 
-  // FARM WAVE button (left side) - replay previous wave
-  const replayBtnX = W / 2 - 200;
-  const replayBtnY = H - 60;
-  if (mx >= replayBtnX && mx <= replayBtnX + 190 && my >= replayBtnY && my <= replayBtnY + 40) {
-    const replayWave = Math.max(1, game.wave - 1);
-    const savedWave = game.wave; // remember current progress
-    game.retryAvailable = false;
-    game.isReplay = true;
-    game.replayGoldMulti = 0.5;
-    setupWave(replayWave);
-    game.replayReturnWave = savedWave; // return to this wave after replay
-    game.state = 'PLAYING';
-    return;
-  }
+  // FARM wave selector buttons (left side)
+  if (game.highestCompletedWave > 0) {
+    const farmX = 10;
+    const farmY = H - 55;
+    const farmH = 42;
+    const maxShow = Math.min(game.highestCompletedWave, 8);
+    const wBtnW = Math.min(48, Math.floor((W / 2 - 30) / maxShow));
 
-  // Retry button (if wave failed)
-  if (game.retryAvailable) {
-    const rbX = W / 2 - 100;
-    const rbY = H - 110;
-    if (mx >= rbX && mx <= rbX + 200 && my >= rbY && my <= rbY + 40) {
-      game.retryAvailable = false;
-      game.replayGoldMulti = 1.0;
-      game.isReplay = false;
-      setupWave(game.wave);
-      game.state = 'PLAYING';
-      return;
+    for (let i = 0; i < maxShow; i++) {
+      const waveNum = game.highestCompletedWave - maxShow + 1 + i;
+      if (waveNum < 1) continue;
+      const bx = farmX + i * (wBtnW + 4);
+      if (mx >= bx && mx <= bx + wBtnW && my >= farmY && my <= farmY + farmH) {
+        game.selectedFarmWave = waveNum;
+        return;
+      }
+    }
+
+    // GO FARM button
+    if (game.selectedFarmWave > 0) {
+      const goX = farmX + maxShow * (wBtnW + 4) + 4;
+      const goW = 60;
+      if (mx >= goX && mx <= goX + goW && my >= farmY && my <= farmY + farmH) {
+        const savedWave = game.wave;
+        game.retryAvailable = false;
+        game.isReplay = true;
+        game.replayGoldMulti = 0.5;
+        game.replayWasFailed = game.waveFailed;
+        ensurePlayerHasShip();
+        setupWave(game.selectedFarmWave);
+        game.replayReturnWave = savedWave;
+        game.state = 'PLAYING';
+        return;
+      }
     }
   }
 
@@ -2895,6 +2963,11 @@ function startNewGame() {
   game.achievementPopupTimer = 0;
   game.skillCooldowns = { airstrike: 0, repair: 0, emp: 0 };
   game.empActive = 0;
+  game.highestCompletedWave = 0;
+  game.selectedFarmWave = 0;
+  game.isReplay = false;
+  game.replayReturnWave = 0;
+  game.replayGoldMulti = 1.0;
   setupWave(1);
 }
 
