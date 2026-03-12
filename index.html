@@ -2529,39 +2529,58 @@ function gameLoop(timestamp) {
     drawHUD();
     drawMinimap();
 
-    // Notification
-    if (game.notification && game.notificationTimer > 0) {
-      const alpha = Math.min(1, game.notificationTimer);
-      ctx.globalAlpha = alpha;
-      ctx.fillStyle = 'rgba(0,0,0,0.7)';
-      ctx.fillRect(W / 2 - 250, H / 2 - 30, 500, 60);
-      ctx.strokeStyle = '#44aaff';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(W / 2 - 250, H / 2 - 30, 500, 60);
-      ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 18px Segoe UI';
-      ctx.textAlign = 'center';
-      ctx.fillText(game.notification, W / 2, H / 2 + 7);
-      ctx.globalAlpha = 1;
-    }
-
-    // Wave complete overlay
+    // Wave complete overlay (combined with notification)
     if (game.waveComplete && game.waveCompleteTimer > 0) {
       const alpha = Math.min(1, game.waveCompleteTimer * 0.5);
       ctx.globalAlpha = alpha;
-      ctx.fillStyle = 'rgba(0,0,0,0.5)';
+      // Dim background
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
       ctx.fillRect(0, 0, W, H);
+      // Central panel
+      const panelW = 400, panelH = 140;
+      const panelX = W / 2 - panelW / 2, panelY = H / 2 - panelH / 2;
+      ctx.fillStyle = 'rgba(10,15,30,0.9)';
+      ctx.fillRect(panelX, panelY, panelW, panelH);
+      ctx.strokeStyle = game.waveFailed ? '#ff4444' : '#44ff66';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(panelX, panelY, panelW, panelH);
+      // Title
       ctx.fillStyle = game.waveFailed ? '#ff4444' : '#44ff66';
-      ctx.font = 'bold 36px Segoe UI';
+      ctx.font = 'bold 32px Segoe UI';
       ctx.textAlign = 'center';
-      ctx.fillText(game.waveFailed ? 'WAVE FAILED' : 'WAVE COMPLETE!', W / 2, H / 2 - 20);
+      ctx.fillText(game.waveFailed ? 'WAVE FAILED' : 'WAVE COMPLETE!', W / 2, panelY + 40);
+      // Gold earned
       ctx.fillStyle = '#ffd700';
-      ctx.font = '18px Segoe UI';
-      ctx.fillText('Gold Earned: ' + game.waveGoldEarned, W / 2, H / 2 + 20);
+      ctx.font = 'bold 18px Segoe UI';
+      ctx.fillText('Gold Earned: ' + game.waveGoldEarned, W / 2, panelY + 75);
+      // Convoy survived or fail message
       if (!game.waveFailed) {
         ctx.fillStyle = '#88ddff';
-        ctx.fillText('Convoy Survived: ' + game.survivedConvoy + '/' + game.totalConvoy, W / 2, H / 2 + 50);
+        ctx.font = '16px Segoe UI';
+        ctx.fillText('Convoy Survived: ' + game.survivedConvoy + '/' + game.totalConvoy, W / 2, panelY + 105);
+      } else if (game.isReplay) {
+        ctx.fillStyle = '#88bbff';
+        ctx.font = '14px Segoe UI';
+        ctx.fillText('No penalty - replay wave', W / 2, panelY + 105);
+      } else {
+        ctx.fillStyle = '#ff8844';
+        ctx.font = '14px Segoe UI';
+        ctx.fillText('Lives remaining: ' + (game.maxFails - game.failedWaves), W / 2, panelY + 105);
       }
+      ctx.globalAlpha = 1;
+    } else if (game.notification && game.notificationTimer > 0) {
+      // Non-wave notifications (skills, etc.)
+      const alpha = Math.min(1, game.notificationTimer);
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = 'rgba(0,0,0,0.7)';
+      ctx.fillRect(W / 2 - 220, H / 2 - 22, 440, 44);
+      ctx.strokeStyle = '#44aaff';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(W / 2 - 220, H / 2 - 22, 440, 44);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 16px Segoe UI';
+      ctx.textAlign = 'center';
+      ctx.fillText(game.notification, W / 2, H / 2 + 6);
       ctx.globalAlpha = 1;
     }
 
