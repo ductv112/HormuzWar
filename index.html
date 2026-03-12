@@ -2,27 +2,68 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="screen-orientation" content="landscape">
 <title>Hormuz War - Naval Escort Commander</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body {
+html, body {
   background: #0a0a1a;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+body {
   display: flex;
   justify-content: center;
   align-items: center;
-  min-height: 100vh;
   font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-  overflow: hidden;
 }
 canvas {
   border: 2px solid #1a3a5c;
   box-shadow: 0 0 30px rgba(0,100,200,0.3);
   cursor: default;
+  touch-action: none;
+}
+#rotate-hint {
+  display: none;
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: #0a0a1a;
+  color: #88bbdd;
+  font-size: 20px;
+  z-index: 9999;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 20px;
+}
+#rotate-hint .icon {
+  font-size: 60px;
+  animation: rotateHint 2s ease-in-out infinite;
+}
+@keyframes rotateHint {
+  0%, 100% { transform: rotate(0deg); }
+  50% { transform: rotate(90deg); }
+}
+@media (orientation: portrait) and (max-width: 900px) {
+  #rotate-hint { display: flex; }
+  canvas { display: none; }
 }
 </style>
 </head>
 <body>
+<div id="rotate-hint">
+  <div class="icon">📱</div>
+  <div>Please rotate your device</div>
+  <div style="font-size:14px;color:#667788">This game is best played in landscape mode</div>
+</div>
 <canvas id="gameCanvas" width="900" height="700"></canvas>
 <script>
 "use strict";
@@ -30,6 +71,55 @@ canvas {
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 const W = 900, H = 700;
+
+// ============== MOBILE / RESPONSIVE ==============
+const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+
+function resizeCanvas() {
+  const maxW = window.innerWidth;
+  const maxH = window.innerHeight;
+  const scale = Math.min(maxW / W, maxH / H);
+  canvas.style.width = Math.floor(W * scale) + 'px';
+  canvas.style.height = Math.floor(H * scale) + 'px';
+}
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+
+function getTouchPos(touch) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (touch.clientX - rect.left) * (W / rect.width),
+    y: (touch.clientY - rect.top) * (H / rect.height)
+  };
+}
+
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  initAudio();
+  const pos = getTouchPos(e.touches[0]);
+  game.mouseX = pos.x;
+  game.mouseY = pos.y;
+  // Simulate click
+  const clickEvent = new MouseEvent('click', {
+    clientX: e.touches[0].clientX,
+    clientY: e.touches[0].clientY
+  });
+  canvas.dispatchEvent(clickEvent);
+}, { passive: false });
+
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  const pos = getTouchPos(e.touches[0]);
+  game.mouseX = pos.x;
+  game.mouseY = pos.y;
+}, { passive: false });
+
+canvas.addEventListener('touchend', e => {
+  e.preventDefault();
+}, { passive: false });
+
+// Prevent all default touch behaviors on document
+document.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
 
 // ============== AUDIO ==============
 let audioCtx = null;
@@ -2761,10 +2851,26 @@ function handleShopClick(mx, my) {
 
 // ============== GAME CLICK ==============
 function handleGameClick(mx, my) {
+  // Skill buttons (tap on mobile)
+  const skBarY = H - 40;
+  const skillKeys = Object.keys(SKILLS);
+  for (let i = 0; i < skillKeys.length; i++) {
+    const bx = 10 + i * 130;
+    if (mx >= bx && mx <= bx + 120 && my >= skBarY && my <= skBarY + 30) {
+      const id = skillKeys[i];
+      const sk = SKILLS[id];
+      if (game.wave >= sk.unlockWave && game.skillCooldowns[id] <= 0) {
+        activateSkill(id);
+      }
+      return;
+    }
+  }
+
   // Intercept missiles
   for (let i = game.missiles.length - 1; i >= 0; i--) {
     const m = game.missiles[i];
-    if (m.launched && dist({ x: mx, y: my }, m) < 60) {
+    const interceptRadius = isMobile ? 80 : 60;
+    if (m.launched && dist({ x: mx, y: my }, m) < interceptRadius) {
       if (game.interceptorMissiles > 0) {
         game.interceptorMissiles--;
         m.alive = false;
@@ -2805,8 +2911,8 @@ function drawMenu() {
   ctx.font = '14px Segoe UI';
   ctx.fillText('Protect the convoy through the Strait of Hormuz', W / 2, 280);
   ctx.fillText('Your escort ships fight automatically in formation', W / 2, 305);
-  ctx.fillText('Click to intercept incoming missiles', W / 2, 330);
-  ctx.fillText('Press 1/2/3 for special skills (Air Strike, Repair, EMP)', W / 2, 355);
+  ctx.fillText('Tap/Click to intercept incoming missiles', W / 2, 330);
+  ctx.fillText('Tap skill buttons or press 1/2/3 for special skills', W / 2, 355);
   ctx.fillText('Weather changes each wave | Earn achievements for gold', W / 2, 380);
 
   // Start button
