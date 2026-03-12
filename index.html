@@ -262,6 +262,8 @@ const game = {
   achievementPopup: null,
   achievementPopupTimer: 0,
   blackMarketOffers: [],
+  replayGoldMulti: 1.0,
+  isReplay: false,
 };
 
 // ============== CLASSES ==============
@@ -1117,7 +1119,7 @@ function drawHUD() {
   ctx.fillText('Gold: ' + game.gold, 10, 24);
 
   ctx.fillStyle = '#ffffff';
-  ctx.fillText('Wave: ' + game.wave, 150, 24);
+  ctx.fillText('Wave: ' + game.wave + (game.isReplay ? ' (Replay)' : ''), 150, 24);
 
   ctx.fillStyle = '#44aaff';
   ctx.fillText('Score: ' + game.score, 280, 24);
@@ -1283,24 +1285,26 @@ function updateGame(dt) {
                 e2.hp -= p.damage * 0.5;
                 if (e2.hp <= 0) {
                   spawnExplosion(e2.x, e2.y, 12);
-                  game.gold += e2.gold;
-                  game.score += e2.gold;
-                  game.waveGoldEarned += e2.gold;
+                  const g2 = Math.floor(e2.gold * game.replayGoldMulti);
+                  game.gold += g2;
+                  game.score += g2;
+                  game.waveGoldEarned += g2;
                   game.totalKills++;
                   if (e2.isBoss) game.bossKills++;
-                  addFloatingText(e2.x, e2.y - 15, '+' + e2.gold + 'g', '#ffd700');
+                  addFloatingText(e2.x, e2.y - 15, '+' + g2 + 'g', '#ffd700');
                 }
               }
             }
           }
           if (e.hp <= 0) {
             spawnExplosion(e.x, e.y, 15);
-            game.gold += e.gold;
-            game.score += e.gold;
-            game.waveGoldEarned += e.gold;
+            const g = Math.floor(e.gold * game.replayGoldMulti);
+            game.gold += g;
+            game.score += g;
+            game.waveGoldEarned += g;
             game.totalKills++;
             if (e.isBoss) game.bossKills++;
-            addFloatingText(e.x, e.y - 15, '+' + e.gold + 'g', '#ffd700');
+            addFloatingText(e.x, e.y - 15, '+' + g + 'g', '#ffd700');
           }
           break;
         }
@@ -1419,11 +1423,13 @@ function completeWave() {
       bonus += c.goldBonus;
     }
   }
+  bonus = Math.floor(bonus * game.replayGoldMulti);
   game.gold += bonus;
   game.score += bonus;
   game.waveGoldEarned += bonus;
 
-  game.notification = 'Wave ' + game.wave + ' Complete! +' + bonus + ' gold bonus';
+  const replayTag = game.isReplay ? ' (Replay -50%)' : '';
+  game.notification = 'Wave ' + game.wave + ' Complete! +' + bonus + ' gold bonus' + replayTag;
   game.notificationTimer = 3;
 
   // Refill interceptors
@@ -1514,22 +1520,43 @@ function drawShop() {
     drawShopMarket(contentY);
   }
 
-  // Continue button
-  const btnX = W / 2 - 100;
-  const btnY = H - 60;
-  const btnW = 200;
-  const btnH = 40;
+  // Bottom buttons
+  // NEXT WAVE button (right side)
+  const nextBtnX = W / 2 + 10;
+  const nextBtnY = H - 60;
+  const nextBtnW = 190;
+  const nextBtnH = 40;
   ctx.fillStyle = '#1a6a2a';
-  ctx.fillRect(btnX, btnY, btnW, btnH);
+  ctx.fillRect(nextBtnX, nextBtnY, nextBtnW, nextBtnH);
   ctx.strokeStyle = '#44ff66';
   ctx.lineWidth = 2;
-  ctx.strokeRect(btnX, btnY, btnW, btnH);
+  ctx.strokeRect(nextBtnX, nextBtnY, nextBtnW, nextBtnH);
   ctx.fillStyle = '#ffffff';
   ctx.font = 'bold 16px Segoe UI';
   ctx.textAlign = 'center';
-  ctx.fillText('NEXT WAVE >>', W / 2, btnY + 26);
+  ctx.fillText('NEXT WAVE >>', nextBtnX + nextBtnW / 2, nextBtnY + 26);
 
-  // Retry button (if available)
+  // REPLAY WAVE button (left side) - farm gold
+  const replayBtnX = W / 2 - 200;
+  const replayBtnY = H - 60;
+  const replayBtnW = 190;
+  const replayBtnH = 40;
+  const replayWave = Math.max(1, game.wave);
+  const replayGoldPenalty = Math.max(1, game.wave - 1); // earlier waves give less
+  ctx.fillStyle = '#1a3a6a';
+  ctx.fillRect(replayBtnX, replayBtnY, replayBtnW, replayBtnH);
+  ctx.strokeStyle = '#4488ff';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(replayBtnX, replayBtnY, replayBtnW, replayBtnH);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 14px Segoe UI';
+  ctx.textAlign = 'center';
+  ctx.fillText('REPLAY WAVE ' + replayWave, replayBtnX + replayBtnW / 2, replayBtnY + 18);
+  ctx.fillStyle = '#88bbff';
+  ctx.font = '10px Segoe UI';
+  ctx.fillText('Farm gold (reduced rewards)', replayBtnX + replayBtnW / 2, replayBtnY + 33);
+
+  // Retry button (if wave failed)
   if (game.retryAvailable) {
     const rbX = W / 2 - 100;
     const rbY = H - 110;
@@ -1545,7 +1572,7 @@ function drawShop() {
   }
 
   // Fleet display
-  const fleetY = H - 170;
+  const fleetY = H - 175;
   ctx.fillStyle = '#aaaaaa';
   ctx.font = '11px Segoe UI';
   ctx.textAlign = 'center';
@@ -2055,22 +2082,39 @@ function handleShopClick(mx, my) {
     }
   }
 
-  // Continue button
-  const btnX = W / 2 - 100;
-  const btnY = H - 60;
-  if (mx >= btnX && mx <= btnX + 200 && my >= btnY && my <= btnY + 40) {
+  // NEXT WAVE button (right side)
+  const nextBtnX = W / 2 + 10;
+  const nextBtnY = H - 60;
+  if (mx >= nextBtnX && mx <= nextBtnX + 190 && my >= nextBtnY && my <= nextBtnY + 40) {
     game.retryAvailable = false;
+    game.replayGoldMulti = 1.0;
+    game.isReplay = false;
     setupWave(game.wave + 1);
     game.state = 'PLAYING';
     return;
   }
 
-  // Retry button
+  // REPLAY WAVE button (left side)
+  const replayBtnX = W / 2 - 200;
+  const replayBtnY = H - 60;
+  if (mx >= replayBtnX && mx <= replayBtnX + 190 && my >= replayBtnY && my <= replayBtnY + 40) {
+    const replayWave = Math.max(1, game.wave);
+    game.retryAvailable = false;
+    game.isReplay = true;
+    game.replayGoldMulti = 0.5; // 50% gold reward for replays
+    setupWave(replayWave);
+    game.state = 'PLAYING';
+    return;
+  }
+
+  // Retry button (if wave failed)
   if (game.retryAvailable) {
     const rbX = W / 2 - 100;
     const rbY = H - 110;
     if (mx >= rbX && mx <= rbX + 200 && my >= rbY && my <= rbY + 40) {
       game.retryAvailable = false;
+      game.replayGoldMulti = 1.0;
+      game.isReplay = false;
       setupWave(game.wave);
       game.state = 'PLAYING';
       return;
@@ -2374,10 +2418,13 @@ function activateSkill(id) {
       e.hp -= 80;
       if (e.hp <= 0) {
         spawnExplosion(e.x, e.y, 15);
-        game.gold += e.gold;
-        game.score += e.gold;
-        game.waveGoldEarned += e.gold;
-        addFloatingText(e.x, e.y - 15, '+' + e.gold + 'g', '#ffd700');
+        const g = Math.floor(e.gold * game.replayGoldMulti);
+        game.gold += g;
+        game.score += g;
+        game.waveGoldEarned += g;
+        game.totalKills++;
+        if (e.isBoss) game.bossKills++;
+        addFloatingText(e.x, e.y - 15, '+' + g + 'g', '#ffd700');
       } else {
         spawnExplosion(e.x, e.y, 8);
         addFloatingText(e.x, e.y - 15, '-80', '#ff8844');
